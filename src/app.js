@@ -7,6 +7,8 @@ const helmet = require('helmet');
 const logger = require('./utils/logger');
 const punchRoutes = require('./routes/punchRoutes');
 const orderRoutes = require('./routes/orderRoutes');
+const locationRoutes = require('./routes/locationRoutes');
+
 
 const authRoutes = require('./routes/authRoutes');
 
@@ -75,6 +77,7 @@ if (fs.existsSync(resetPasswordView)) {
 // API Routes (POST-only for auth)
 app.use('/api/auth', authRoutes);
 app.use('/api/attendance', punchRoutes); 
+app.use('/api/location', locationRoutes);
 
 
 
