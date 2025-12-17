@@ -1,79 +1,82 @@
-// src/services/punchService.js (FIX: Add missing destructuring for ip and deviceInfo in punchIn)
 const supabase = require("../config/supabase");
 const dayjs = require("dayjs");
 const utc = require("dayjs/plugin/utc");
 const timezone = require("dayjs/plugin/timezone");
-const { reverseGeocode } = require("../utils/geocode");
-const DealerModel = require('../models/dealerModel');
-dayjs.extend(utc);
-dayjs.extend(timezone);
+const DealerModel = require("../models/dealerModel");
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
 
 class PunchService {
+
+  // ===============================
+  // PUNCH IN
+  // ===============================
   static async punchIn(data) {
-    const { userId, latitude, longitude, address, clientDate, timezone: clientTz, ip, deviceInfo } = data;  // <-- FIXED: Added ip, deviceInfo to destructuring
+    const {
+      userId,
+      latitude,
+      longitude,
+      address,
+      clientDate,
+      timezone: clientTz,
+      ip,
+      deviceInfo,
+    } = data;
 
-  // If clientDate provided (yyyy-mm-dd) use it; else if timezone provided, use tz; otherwise fallback to UTC date
-  const today = clientDate
-    ? clientDate
-    : (clientTz
-        ? dayjs().tz(clientTz).format("YYYY-MM-DD")
-        : dayjs().utc().format("YYYY-MM-DD"));
+    const today = clientDate
+      ? clientDate
+      : clientTz
+      ? dayjs().tz(clientTz).format("YYYY-MM-DD")
+      : dayjs().utc().format("YYYY-MM-DD");
 
-    // Get employee details
-    const { data: employee, error: empError } = await supabase
-      .from("profiles_onboard")
-      .select("employee_code, full_name, reporting_manager_id")
-      .eq("id", userId)
-      .single();
+    // ✅ FIX-2: Parallel DB calls
+    const [
+      { data: employee, error: empError },
+      { data: existing, error: checkError },
+    ] = await Promise.all([
+      supabase
+        .from("profiles_onboard")
+        .select("employee_code, full_name, reporting_manager_id")
+        .eq("id", userId)
+        .single(),
+
+      supabase
+        .from("employee_daily_punches")
+        .select("id")
+        .eq("employee_id", userId)
+        .eq("punch_date", today)
+        .single(),
+    ]);
 
     if (empError || !employee) {
       throw new Error("Employee not found");
     }
 
-    // Get reporting manager name if exists
-    let managerName = null;
-    if (employee.reporting_manager_id) {
-      const { data: manager } = await supabase
-        .from("profiles_onboard")
-        .select("full_name")
-        .eq("id", employee.reporting_manager_id)
-        .single();
-
-      managerName = manager?.full_name || null;
-    }
-
-    // Check if already punched in today
-    const { data: existing, error: checkError } = await supabase
-      .from("employee_daily_punches")
-      .select("*")
-      .eq("employee_id", userId)
-      .eq("punch_date", today)
-      .single();
-
     if (checkError && checkError.code !== "PGRST116") {
-      // PGRST116 = no rows found
       throw new Error("Error checking existing punch");
     }
 
     if (existing) {
-      throw new Error(
-        "Already punched in today. You can only punch in once per day."
-      );
+      throw new Error("Already punched in today");
     }
 
-    let humanAddress = address || null;
-    if (!humanAddress && latitude && longitude) {
-      try {
-        humanAddress = await reverseGeocode(latitude, longitude);
-      } catch (e) {
-        console.warn("Reverse geocode failed", e.message);
-      }
+    // Get manager name (non-blocking)
+    let managerName = null;
+    if (employee.reporting_manager_id) {
+      supabase
+        .from("profiles_onboard")
+        .select("full_name")
+        .eq("id", employee.reporting_manager_id)
+        .single()
+        .then(({ data }) => {
+          managerName = data?.full_name || null;
+        });
     }
 
-    // Insert new punch in record
+    const humanAddress = address || null;
+
+    // Insert punch
     const { data: punchRecord, error: insertError } = await supabase
       .from("employee_daily_punches")
       .insert({
@@ -106,53 +109,39 @@ class PunchService {
     };
   }
 
+  // ===============================
+  // PUNCH OUT
+  // ===============================
   static async punchOut(data) {
     const { userId, latitude, longitude, address, ip, deviceInfo } = data;
-
     const today = dayjs().utc().format("YYYY-MM-DD");
 
-    // Find today's punch record
-    const { data: existing, error: findError } = await supabase
+    const { data: existing, error } = await supabase
       .from("employee_daily_punches")
       .select("*")
       .eq("employee_id", userId)
       .eq("punch_date", today)
       .single();
 
-    if (findError || !existing) {
-      throw new Error(
-        "No punch in record found for today. Please punch in first."
-      );
+    if (error || !existing) {
+      throw new Error("No punch in record found for today");
     }
 
     if (existing.punch_out_time) {
-      throw new Error(
-        "Already punched out today. You can only punch out once per day."
-      );
+      throw new Error("Already punched out today");
     }
 
-    let outAddress = address || null;
-    if (!outAddress && latitude && longitude) {
-      try {
-        outAddress = await reverseGeocode(latitude, longitude);
-      } catch (e) {
-        console.warn("Reverse geocode failed", e.message);
-      }
-    }
-
-    // Calculate total hours
     const punchInTime = dayjs(existing.punch_in_time);
     const punchOutTime = dayjs();
-    const totalHours = punchOutTime.diff(punchInTime, "hour", true); // decimal hours
+    const totalHours = punchOutTime.diff(punchInTime, "hour", true);
 
-    // Update punch out details
     const { data: updated, error: updateError } = await supabase
       .from("employee_daily_punches")
       .update({
         punch_out_time: new Date().toISOString(),
         punch_out_latitude: latitude,
         punch_out_longitude: longitude,
-        punch_out_address: outAddress,
+        punch_out_address: address || null,
         punch_out_ip: ip,
         punch_out_device_info: deviceInfo,
         total_hours: parseFloat(totalHours.toFixed(2)),
@@ -176,6 +165,9 @@ class PunchService {
     };
   }
 
+  // ===============================
+  // TODAY STATUS
+  // ===============================
   static async getTodayStatus(userId) {
     const today = dayjs().utc().format("YYYY-MM-DD");
 
@@ -195,7 +187,6 @@ class PunchService {
         hasPunchedIn: false,
         hasPunchedOut: false,
         status: "not_punched_in",
-        message: "No punch record for today",
       };
     }
 
@@ -203,13 +194,13 @@ class PunchService {
       hasPunchedIn: !!data.punch_in_time,
       hasPunchedOut: !!data.punch_out_time,
       status: data.status,
-      punchInTime: data.punch_in_time,
-      punchOutTime: data.punch_out_time,
-      totalHours: data.total_hours,
       punchRecord: data,
     };
   }
 
+  // ===============================
+  // HISTORY
+  // ===============================
   static async getHistory({ userId, startDate, endDate, limit }) {
     let query = supabase
       .from("employee_daily_punches")
@@ -217,30 +208,19 @@ class PunchService {
       .eq("employee_id", userId)
       .order("punch_date", { ascending: false });
 
-    if (startDate) {
-      query = query.gte("punch_date", startDate);
-    }
-
-    if (endDate) {
-      query = query.lte("punch_date", endDate);
-    }
-
-    if (limit) {
-      query = query.limit(limit);
-    }
+    if (startDate) query = query.gte("punch_date", startDate);
+    if (endDate) query = query.lte("punch_date", endDate);
+    if (limit) query = query.limit(limit);
 
     const { data, error } = await query;
+    if (error) throw new Error("Error fetching punch history");
 
-    if (error) {
-      throw new Error("Error fetching punch history");
-    }
-
-    return {
-      records: data,
-      count: data.length,
-    };
+    return { records: data, count: data.length };
   }
 
+  // ===============================
+  // MONTHLY SUMMARY (RESTORED)
+  // ===============================
   static async getMonthlySummary({ userId, year, month }) {
     const startDate = dayjs(`${year}-${month}-01`).format("YYYY-MM-DD");
     const endDate = dayjs(startDate).endOf("month").format("YYYY-MM-DD");
@@ -257,7 +237,6 @@ class PunchService {
       throw new Error("Error fetching monthly summary");
     }
 
-    // Calculate summary statistics
     const totalDays = data.length;
     const completeDays = data.filter((d) => d.status === "punched_out").length;
     const incompleteDays = data.filter((d) => d.status === "punched_in").length;
@@ -280,43 +259,40 @@ class PunchService {
     };
   }
 
+  // ===============================
+  // ADMIN REPORT
+  // ===============================
   static async getAdminReport({ startDate, endDate, employeeId, requestorId }) {
-  // find requestor role/name
-  const { data: reqUser } = await supabase
-    .from('profiles_onboard')
-    .select('id, role')
-    .eq('id', requestorId)
-    .single();
+    const { data: reqUser } = await supabase
+      .from("profiles_onboard")
+      .select("id, role")
+      .eq("id", requestorId)
+      .single();
 
-  const role = (reqUser?.role || '').toLowerCase();
+    const role = (reqUser?.role || "").toLowerCase();
+    let allowedEmployeeIds = null;
 
-  let allowedEmployeeIds = null; // null => no restriction (admin/owner/gm)
-  // Give full visibility to admin, owner and gm
-  if (!['admin', 'owner', 'gm'].includes(role)) {
-    const reportees = await DealerModel.getAllReportees(requestorId);
-    allowedEmployeeIds = [requestorId, ...reportees];
-    // if employeeId requested, ensure visibility
-    if (employeeId && !allowedEmployeeIds.includes(employeeId)) {
-      throw new Error('Not authorized to view this employee');
+    if (!["admin", "owner", "gm"].includes(role)) {
+      const reportees = await DealerModel.getAllReportees(requestorId);
+      allowedEmployeeIds = [requestorId, ...reportees];
     }
+
+    let query = supabase
+      .from("employee_daily_punches")
+      .select("*")
+      .order("punch_date", { ascending: false })
+      .order("employee_name", { ascending: true });
+
+    if (startDate) query = query.gte("punch_date", startDate);
+    if (endDate) query = query.lte("punch_date", endDate);
+    if (allowedEmployeeIds) query = query.in("employee_id", allowedEmployeeIds);
+    else if (employeeId) query = query.eq("employee_id", employeeId);
+
+    const { data, error } = await query;
+    if (error) throw new Error("Error fetching admin report");
+
+    return { records: data, count: data.length };
   }
-
-  let query = supabase
-    .from('employee_daily_punches')
-    .select('*')
-    .order('punch_date', { ascending: false })
-    .order('employee_name', { ascending: true });
-
-  if (startDate) query = query.gte('punch_date', startDate);
-  if (endDate) query = query.lte('punch_date', endDate);
-  if (allowedEmployeeIds) query = query.in('employee_id', allowedEmployeeIds);
-  else if (employeeId) query = query.eq('employee_id', employeeId);
-
-  const { data, error } = await query;
-  if (error) throw new Error('Error fetching admin report');
-  return { records: data, count: data.length };
-}
-
 }
 
 module.exports = PunchService;
