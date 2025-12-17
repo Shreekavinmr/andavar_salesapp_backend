@@ -221,6 +221,65 @@ class UserModel {
     throw new Error(`Get possible managers error: ${error?.message || error}`);
   }
 }
+static async findByEmailOrPhone(identifier) {
+    try {
+      // Check if identifier looks like a phone number (digits only)
+      const isPhone = /^\d+$/.test(identifier.trim());
+      
+      let query = supabase
+        .from("profiles_onboard")
+        .select(
+          "id, email, phone, password_hash, full_name, role, is_active, employee_code"
+        );
+
+      if (isPhone) {
+        // Search by phone
+        query = query.eq("phone", identifier.trim());
+      } else {
+        // Search by email
+        query = query.eq("email", identifier.trim());
+      }
+
+      const { data, error } = await query.single();
+
+      if (error && error.code !== "PGRST116") {
+        throw new Error(`Database error: ${error.message}`);
+      }
+
+      if (data && !data.is_active) {
+        return null;
+      }
+
+      return data || null;
+    } catch (error) {
+      throw new Error(`User fetch error: ${error.message}`);
+    }
+  }
+
+  // Keep the existing findByEmail for backward compatibility
+  static async findByEmail(email) {
+    try {
+      const { data, error } = await supabase
+        .from("profiles_onboard")
+        .select(
+          "id, email, password_hash, full_name, role, is_active, employee_code"
+        )
+        .eq("email", email)
+        .single();
+
+      if (error && error.code !== "PGRST116") {
+        throw new Error(`Database error: ${error.message}`);
+      }
+
+      if (data && !data.is_active) {
+        return null;
+      }
+
+      return data || null;
+    } catch (error) {
+      throw new Error(`User fetch error: ${error.message}`);
+    }
+  }
 
   static async generateEmployeeCode() {
     try {

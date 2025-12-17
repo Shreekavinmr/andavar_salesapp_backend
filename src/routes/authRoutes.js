@@ -19,6 +19,7 @@ router.use('/location', locationRoutes);
 
 // Auth routes
 router.post('/login', validateLogin, AuthController.login);
+router.post('/update-location', authenticateToken, AuthController.updateLocation);
 router.post('/logout', authenticateToken, AuthController.logout);
 router.post('/forgot-password', validateForgotPassword, AuthController.forgotPassword);
 router.post('/reset-password', AuthController.resetPassword);
