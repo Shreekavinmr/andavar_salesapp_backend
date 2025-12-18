@@ -1,10 +1,9 @@
-const LocationModel = require('../models/locationModel');
-const AdminService = require('./adminService');
-const logger = require('../utils/logger');
-const geolib = require('geolib');
+const LocationModel = require("../models/locationModel");
+const AdminService = require("./adminService");
+const logger = require("../utils/logger");
+const geolib = require("geolib");
 
 class LocationService {
-
   static async startSession(userId) {
     return await LocationModel.startSession(userId);
   }
@@ -24,16 +23,44 @@ class LocationService {
     const { latitude, longitude, accuracy, speed, recorded_at } = payload;
 
     if (!latitude || !longitude || !recorded_at) {
-      throw new Error('latitude, longitude and recorded_at are required');
+      throw new Error("latitude, longitude and recorded_at are required");
     }
 
+    // 🔥 1️⃣ Check active session
+    const today = new Date().toISOString().slice(0, 10);
+    const { data: session } = await supabase
+      .from("tracking_sessions")
+      .select("id")
+      .eq("user_id", userId)
+      .eq("session_date", today)
+      .eq("is_active", true)
+      .single();
+
+    if (!session) {
+      throw new Error("No active tracking session");
+    }
+
+    // 🔥 2️⃣ Prevent duplicate consecutive points
+    const { data: last } = await supabase
+      .from("location_logs")
+      .select("latitude, longitude")
+      .eq("user_id", userId)
+      .order("recorded_at", { ascending: false })
+      .limit(1)
+      .single();
+
+    if (last && last.latitude === latitude && last.longitude === longitude) {
+      return { skipped: true };
+    }
+
+    // 🔥 3️⃣ Insert location
     return await LocationModel.insertLocation({
       user_id: userId,
       latitude,
       longitude,
       accuracy,
       speed,
-      recorded_at
+      recorded_at,
     });
   }
 
@@ -44,7 +71,7 @@ class LocationService {
     if (userId !== requester.id) {
       const reportees = await AdminService.getAllReportees(requester.id);
       if (!reportees.includes(userId)) {
-        throw new Error('Not authorized to view this route');
+        throw new Error("Not authorized to view this route");
       }
     }
 
@@ -57,7 +84,7 @@ class LocationService {
     if (userId !== requester.id) {
       const reportees = await AdminService.getAllReportees(requester.id);
       if (!reportees.includes(userId)) {
-        throw new Error('Not authorized to view this distance');
+        throw new Error("Not authorized to view this distance");
       }
     }
 
@@ -93,7 +120,11 @@ class LocationService {
     // 3. ✅ ALWAYS save to DB, even if distance is 0
     await LocationModel.upsertDailyDistance(userId, date, distanceKm);
 
-    logger.info(`Distance calculated for ${userId} on ${date}: ${distanceKm} km (${points?.length || 0} points)`);
+    logger.info(
+      `Distance calculated for ${userId} on ${date}: ${distanceKm} km (${
+        points?.length || 0
+      } points)`
+    );
 
     return { distance_km: distanceKm, point_count: points?.length || 0 };
   }
