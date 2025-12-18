@@ -2,6 +2,7 @@ const LocationModel = require("../models/locationModel");
 const AdminService = require("./adminService");
 const logger = require("../utils/logger");
 const geolib = require("geolib");
+const supabase = require('../config/supabase');
 
 class LocationService {
   static async startSession(userId) {
