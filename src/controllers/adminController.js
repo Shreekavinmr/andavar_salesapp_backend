@@ -249,6 +249,26 @@ static async unassignDealerSOs(req, res) {
   }
 }
 
+static async getMyReportees(req, res) {
+  try {
+    const reporteeIds = await AdminService.getAllReportees(req.user.id);
+
+    const { data, error } = await supabase
+      .from('profiles_onboard')
+      .select('id, full_name, employee_code')
+      .in('id', reporteeIds)
+      .eq('is_active', true);
+
+    if (error) throw new Error(error.message);
+
+    sendResponse(res, 200, 'Reportees fetched', data);
+  } catch (e) {
+    logger.error(`getMyReportees error: ${e.message}`);
+    sendResponse(res, 400, e.message);
+  }
+}
+
+
 
 }
 
