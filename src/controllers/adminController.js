@@ -2,6 +2,7 @@
 const AdminService = require('../services/adminService');
 const { sendResponse } = require('../utils/responseHandler');
 const logger = require('../utils/logger');
+const supabase = require("../config/supabase");
 
 class AdminController {
   // ==============================
