@@ -43,6 +43,7 @@ router.get(
 );
 
 
+
 // Managers & Roles: these endpoints need a logged-in user, service enforces authorization
 router.get('/admin/managers', authenticateToken, AdminController.getPossibleManagers);
 router.get('/admin/roles', authenticateToken, requireAdmin, requireSameDayLogin, AdminController.getRoles);

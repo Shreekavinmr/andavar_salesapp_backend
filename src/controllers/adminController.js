@@ -253,6 +253,10 @@ static async getMyReportees(req, res) {
   try {
     const reporteeIds = await AdminService.getAllReportees(req.user.id);
 
+    if (!reporteeIds.length) {
+      return sendResponse(res, 200, 'No reportees', []);
+    }
+
     const { data, error } = await supabase
       .from('profiles_onboard')
       .select('id, full_name, employee_code')
@@ -267,6 +271,7 @@ static async getMyReportees(req, res) {
     sendResponse(res, 400, e.message);
   }
 }
+
 
 
 
