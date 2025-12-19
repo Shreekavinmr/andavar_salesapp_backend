@@ -2,7 +2,7 @@ const LocationModel = require("../models/locationModel");
 const AdminService = require("./adminService");
 const logger = require("../utils/logger");
 const geolib = require("geolib");
-const supabase = require('../config/supabase');
+const supabase = require("../config/supabase");
 
 class LocationService {
   static async startSession(userId) {
@@ -22,6 +22,10 @@ class LocationService {
 
   static async insertLocation(userId, payload) {
     const { latitude, longitude, accuracy, speed, recorded_at } = payload;
+
+    if (accuracy && accuracy > 30) {
+      return { skipped: true, reason: "low_accuracy" };
+    }
 
     if (!latitude || !longitude || !recorded_at) {
       throw new Error("latitude, longitude and recorded_at are required");

@@ -35,6 +35,13 @@ router.post('/admin/onboard', authenticateToken, requireAdmin, requireSameDayLog
 router.get('/admin/employees', authenticateToken, requireSameDayLogin, AdminController.getEmployees);
 router.put('/admin/employees/:id', authenticateToken, requireAdmin, requireSameDayLogin, AdminController.updateEmployee);
 router.delete('/admin/employees/:id', authenticateToken, requireAdmin, requireSameDayLogin, AdminController.deleteEmployee);
+router.get(
+  '/admin/my-reportees',
+  authenticateToken,
+  requireSameDayLogin,
+  AdminController.getMyReportees
+);
+
 
 // Managers & Roles: these endpoints need a logged-in user, service enforces authorization
 router.get('/admin/managers', authenticateToken, AdminController.getPossibleManagers);
