@@ -19,8 +19,7 @@ router.post('/orders/:id/reject', authenticateToken, OrderController.rejectOrder
 router.post('/orders/:id/deliver', authenticateToken, OrderController.markDelivered);
 
 router.get('/admin/orders/:orderId/details', 
-  authenticateToken, 
-  requireSameDayLogin, 
+  authenticateToken,
   async (req, res) => {
     try {
       const { orderId } = req.params;
