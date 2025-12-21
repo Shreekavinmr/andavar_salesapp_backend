@@ -3,6 +3,7 @@ const DealerLedgerModel = require("../models/DealerLedgerModel");
 const { sendResponse } = require("../utils/responseHandler");
 const logger = require("../utils/logger");
 const path = require("path");
+const DealerPaymentRequestModel = require("../models/DealerPaymentRequestModel");
 
 class AdminDealerLedgerController {
   /**
@@ -95,44 +96,44 @@ class AdminDealerLedgerController {
   static async recordPayment(req, res) {
   try {
     const { dealerId } = req.params;
-    const { 
-      amount, 
-      payment_mode, 
-      description, 
-      receipt_filename, 
-      receipt_storage_path, 
-      receipt_url,
-      collected_by 
-    } = req.body;
-
-    const userId = req.user.id;
-
-    if (!amount || isNaN(amount) || amount <= 0) {
-      return sendResponse(res, 400, 'Valid positive amount is required');
-    }
-
-    if (!receipt_filename) {
-      return sendResponse(res, 400, 'Receipt file is required.');
-    }
-
-    const meta = {
+    const {
+      amount,
+      payment_mode,
+      description,
       receipt_filename,
       receipt_storage_path,
       receipt_url,
-      collected_by: collected_by || null
-    };
+      collected_by,
+    } = req.body;
 
-    const result = await DealerLedgerModel.recordPayment(
-      dealerId,
-      parseFloat(amount),
+    if (!amount || isNaN(amount) || amount <= 0) {
+      return sendResponse(res, 400, "Valid positive amount is required");
+    }
+
+    if (!receipt_filename) {
+      return sendResponse(res, 400, "Receipt file is required");
+    }
+
+    const payload = {
+      dealer_id: dealerId,
+      amount: parseFloat(amount),
       payment_mode,
       description,
-      userId,
-      meta
+      receipt_filename,
+      receipt_storage_path,
+      receipt_url,
+      requested_by: req.user.id,
+      status: "pending",
+    };
+
+    const result = await DealerPaymentRequestModel.createRequest(payload);
+
+    sendResponse(
+      res,
+      201,
+      "Payment submitted for approval",
+      result
     );
-
-    sendResponse(res, 201, 'Payment recorded successfully', result);
-
   } catch (error) {
     logger.error(`recordPayment error: ${error.message}`);
     sendResponse(res, 400, error.message);
@@ -181,6 +182,47 @@ class AdminDealerLedgerController {
       sendResponse(res, 400, err.message);
     }
   }
+  // Add below getAllPendingAmounts()
+  /**
+ * Get pending payment requests for a dealer
+ * GET /admin/dealers/:dealerId/payment-requests
+ */
+static async getDealerPendingPaymentRequests(req, res) {
+  try {
+    const { dealerId } = req.params;
+
+    const DealerPaymentRequestModel =
+      require("../models/DealerPaymentRequestModel");
+
+    const { data, error } = await require("../config/supabase")
+      .from("dealer_payment_requests")
+      .select(`
+        *,
+        requester:profiles_onboard!dealer_payment_requests_requested_by_fkey(
+          id, full_name, role
+        )
+      `)
+      .eq("dealer_id", dealerId)
+      .eq("status", "pending")
+      .order("requested_at", { ascending: false });
+
+    if (error) throw error;
+
+    sendResponse(
+      res,
+      200,
+      "Pending payment requests fetched",
+      data || []
+    );
+  } catch (error) {
+    logger.error(
+      `getDealerPendingPaymentRequests error: ${error.message}`
+    );
+    sendResponse(res, 400, error.message);
+  }
+}
+
+
 }
 
 module.exports = AdminDealerLedgerController;

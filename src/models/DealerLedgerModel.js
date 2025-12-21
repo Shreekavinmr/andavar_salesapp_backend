@@ -33,7 +33,7 @@ class DealerLedgerModel {
       // Prefer pending_amounts table (single value; assume it's a summary)
       const { data, error } = await supabase
         .from("dealer_pending_amounts")
-        .select("outstanding_amount")
+        .select("pending_amount")
         .eq("dealer_id", dealerId)
         .single();
 
@@ -44,7 +44,7 @@ class DealerLedgerModel {
         );
         return await this._sumLedgerOutstanding(dealerId);
       }
-      return data ? parseFloat(data.outstanding_amount || 0) : 0;
+      return data ? parseFloat(data.pending_amount || 0) : 0;
     } catch (e) {
       logger.error(
         `getDealerPendingAmount error for ${dealerId}: ${e.message}`
@@ -167,7 +167,7 @@ class DealerLedgerModel {
       .upsert(
         {
           dealer_id: dealerId,
-          outstanding_amount: newPending,
+          pending_amount: newPending,
         },
         { onConflict: "dealer_id" }
       );
@@ -185,49 +185,40 @@ class DealerLedgerModel {
    * Record order charge to ledger (positive outstanding) - Called on place or approve
    */
   static async recordOrderCharge(dealerId, amount, orderId, createdBy) {
-    // Add to ledger
-    const { data: ledgerData, error: ledgerError } = await supabase
-      .from("dealer_ledger")
-      .insert({
+  const { data: ledgerData, error: ledgerError } = await supabase
+    .from("dealer_ledger")
+    .insert({
+      dealer_id: dealerId,
+      transaction_type: "order_charge",
+      amount: Math.abs(amount), // POSITIVE
+      reference_type: "order",
+      reference_id: orderId,
+      description: `Order charge for order ${orderId}`,
+      created_by: createdBy,
+      created_at: new Date().toISOString(),
+    })
+    .select()
+    .single();
+
+  if (ledgerError) throw new Error(ledgerError.message);
+
+  const currentPending = await this.getDealerPendingAmount(dealerId);
+  const newPending = currentPending + Math.abs(amount);
+
+  await supabase
+    .from("dealer_pending_amounts")
+    .upsert(
+      {
         dealer_id: dealerId,
-        transaction_type: "payment",
-        amount: -Math.abs(amount),
-        reference_type: "payment",
-        description: description || "Payment received",
-        payment_mode: paymentMode,
-        created_by: createdBy,
-        collected_by: collectedBy,
-        receipt_filename: receiptFilename,
-        receipt_storage_path: meta.receipt_storage_path || null,
-        receipt_url: meta.receipt_url || null,
-        created_at: new Date().toISOString(),
-      })
+        pending_amount: newPending,
+      },
+      { onConflict: "dealer_id" }
+    );
 
-      .select()
-      .single();
+  return ledgerData;
+}
 
-    if (ledgerError) throw new Error(ledgerError.message);
 
-    // Update pending_amounts (increase)
-    const currentPending = await this.getDealerPendingAmount(dealerId);
-    const newPending = currentPending + parseFloat(amount);
-    const { error: updateError } = await supabase
-      .from("dealer_pending_amounts")
-      .upsert(
-        {
-          dealer_id: dealerId,
-          outstanding_amount: newPending,
-        },
-        { onConflict: "dealer_id" }
-      );
-
-    if (updateError)
-      logger.warn(
-        `Pending update failed after order charge for ${dealerId}: ${updateError.message}`
-      );
-
-    return ledgerData;
-  }
 
   /**
    * Check if dealer can place order (no pending amount OR approved)

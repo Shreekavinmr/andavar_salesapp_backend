@@ -8,9 +8,11 @@ const logger = require('./utils/logger');
 const punchRoutes = require('./routes/punchRoutes');
 const orderRoutes = require('./routes/orderRoutes');
 const locationRoutes = require('./routes/locationRoutes');
+const analyticsRoutes = require('./routes/analyticsRoutes');
 
 
 const authRoutes = require('./routes/authRoutes');
+const AnalyticsController = require('./controllers/analyticsController');
 
 const app = express();
 
@@ -78,6 +80,7 @@ if (fs.existsSync(resetPasswordView)) {
 app.use('/api/auth', authRoutes);
 app.use('/api/attendance', punchRoutes); 
 app.use('/api/location', locationRoutes);
+app.use('/api/analytics',analyticsRoutes)
 
 
 

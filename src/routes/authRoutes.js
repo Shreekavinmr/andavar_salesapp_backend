@@ -12,6 +12,8 @@ const orderRoutes = require('./orderRoutes');
 const router = express.Router();
 const upload = require('../middleware/upload');
 const locationRoutes = require('./locationRoutes');
+const PaymentApprovalController = require('../controllers/PaymentApprovalController');
+
 
 // location routes
 router.use('/location', locationRoutes);
@@ -110,6 +112,41 @@ router.post(
   upload.single('receipt'),
   AdminDealerLedgerController.uploadReceiptFile
 );
+
+router.get(
+  '/admin/dealers/:dealerId/payment-requests',
+  authenticateToken,
+  requireSameDayLogin,
+  AdminDealerLedgerController.getDealerPendingPaymentRequests
+);
+
+
+
+// Payment approval (GM / Owner)
+router.get(
+  '/admin/payments/pending',
+  authenticateToken,
+  requireAdmin,
+  requireSameDayLogin,
+  PaymentApprovalController.getPendingPayments
+);
+
+router.post(
+  '/admin/payments/:id/approve',
+  authenticateToken,
+  requireAdmin,
+  requireSameDayLogin,
+  PaymentApprovalController.approvePayment
+);
+
+router.post(
+  '/admin/payments/:id/reject',
+  authenticateToken,
+  requireAdmin,
+  requireSameDayLogin,
+  PaymentApprovalController.rejectPayment
+);
+
 
 
 module.exports = router;
