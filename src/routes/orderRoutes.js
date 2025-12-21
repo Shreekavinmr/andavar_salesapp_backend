@@ -18,4 +18,22 @@ router.post('/orders/:id/approve', authenticateToken, OrderController.approveOrd
 router.post('/orders/:id/reject', authenticateToken, OrderController.rejectOrder);
 router.post('/orders/:id/deliver', authenticateToken, OrderController.markDelivered);
 
+router.get('/admin/orders/:orderId/details', 
+  authenticateToken, 
+  requireSameDayLogin, 
+  async (req, res) => {
+    try {
+      const { orderId } = req.params;
+      const OrderModel = require('../models/OrderModel');
+      const order = await OrderModel.getOrderById(orderId);
+      
+      const { sendResponse } = require('../utils/responseHandler');
+      sendResponse(res, 200, 'Order details fetched', order);
+    } catch (error) {
+      const { sendResponse } = require('../utils/responseHandler');
+      sendResponse(res, 400, error.message);
+    }
+  }
+);
+
 module.exports = router;
