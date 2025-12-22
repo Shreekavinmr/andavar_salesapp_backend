@@ -678,58 +678,31 @@ static async getHomeStats(userId, filter = {}) {
       throw error;
     }
   }
+  
   static async getDealerWiseOrdersForExcel(userId, filter = {}) {
   try {
-    console.log('🔍 DEBUG: Starting getDealerWiseOrdersForExcel...');
-    console.log(`🔍 DEBUG: userId = ${userId}, filter = ${JSON.stringify(filter)}`);
-    
     const salesOfficers = await this.getSalesOfficersUnderUser(userId);
-    console.log(`🔍 DEBUG: Found ${salesOfficers.length} sales officers`);
-    if (salesOfficers.length > 0) {
-      console.log(`🔍 DEBUG: First SO: ${JSON.stringify({
-        id: salesOfficers[0].id,
-        name: salesOfficers[0].full_name,
-        code: salesOfficers[0].employee_code
-      })}`);
-    }
-
-        
     const dealerOrdersData = [];
 
     for (const so of salesOfficers) {
-      console.log(`\n🔍 DEBUG: Processing SO: ${so.full_name} (${so.id})`);
-      
       const dealerIds = await DealerModel.getDealersAssignedTo(so.id);
-      console.log(`🔍 DEBUG: SO ${so.full_name} has ${dealerIds?.length || 0} dealers assigned`);
 
-      if (!dealerIds || dealerIds.length === 0) {
-        console.log(`⚠️ WARNING: No dealers for SO ${so.full_name}`);
-        continue;
-      }
+      if (!dealerIds || dealerIds.length === 0) continue;
 
       // Get dealer details
-      const { data: dealers, error: dealersError } = await supabase
+      const { data: dealers } = await supabase
         .from("dealers")
         .select("id, name, dealer_code, phone, email, address, state")
         .in("id", dealerIds)
         .eq("is_active", true);
 
-      if (dealersError) {
-        console.log(`❌ Error fetching dealers: ${dealersError.message}`);
-        continue;
-      }
-
-      console.log(`🔍 DEBUG: Found ${dealers?.length || 0} active dealers for SO ${so.full_name}`);
-
       for (const dealer of dealers || []) {
-        console.log(`\n  🔍 DEBUG: Checking dealer: ${dealer.name} (${dealer.id})`);
-        
         // Get orders for this dealer with product details
+        // ✅ REMOVED order_number from SELECT
         let orderQuery = supabase
           .from("orders")
           .select(`
             id,
-            order_number,
             created_at,
             total_amount,
             status,
@@ -747,33 +720,10 @@ static async getHomeStats(userId, filter = {}) {
           .eq("placed_on", so.id)
           .eq("is_active", true);
 
-        console.log(`  🔍 DEBUG: Query conditions: dealer_id=${dealer.id}, placed_on=${so.id}, is_active=true`);
-        console.log(`  🔍 DEBUG: Filter to apply: ${JSON.stringify(filter)}`);
-
         orderQuery = this.applyDateFilter(orderQuery, filter);
-        const { data: orders, error: ordersError } = await orderQuery.order("created_at", { ascending: false });
+        const { data: orders } = await orderQuery.order("created_at", { ascending: false });
 
-        if (ordersError) {
-          console.log(`  ❌ Error fetching orders for dealer ${dealer.name}: ${ordersError.message}`);
-          continue;
-        }
-
-        console.log(`  🔍 DEBUG: Found ${orders?.length || 0} orders for dealer ${dealer.name}`);
-        
         if (orders && orders.length > 0) {
-          console.log(`  ✅ Adding dealer ${dealer.name} with ${orders.length} orders to report`);
-          
-          // Log first order details for debugging
-          if (orders[0]) {
-            console.log(`  🔍 DEBUG: First order sample:`, {
-              id: orders[0].id,
-              order_number: orders[0].order_number,
-              status: orders[0].status,
-              created_at: orders[0].created_at,
-              products_count: orders[0].order_lines?.length || 0
-            });
-          }
-          
           dealerOrdersData.push({
             so_name: so.full_name,
             so_employee_code: so.employee_code,
@@ -786,7 +736,7 @@ static async getHomeStats(userId, filter = {}) {
             dealer_state: dealer.state,
             orders: orders.map(order => ({
               order_id: order.id,
-              order_number: order.order_number,
+              order_number: order.id.substring(0, 8), // ✅ Generate order number from ID
               order_date: order.created_at,
               total_amount: order.total_amount,
               status: order.status,
@@ -800,125 +750,104 @@ static async getHomeStats(userId, filter = {}) {
               }))
             }))
           });
-        } else {
-          console.log(`  ⚠️ WARNING: No orders found for dealer ${dealer.name} with current filters`);
-          
-          // 🔍 DEBUG: Check if orders exist WITHOUT filters
-          console.log(`  🔍 DEBUG: Checking without filters...`);
-          const { data: allOrders, error: allOrdersError } = await supabase
-            .from("orders")
-            .select("id, placed_on, status, is_active, created_at")
-            .eq("dealer_id", dealer.id)
-            .limit(5);
-          
-          if (!allOrdersError && allOrders) {
-            console.log(`  🔍 DEBUG: Dealer has ${allOrders.length} total orders (no filters):`);
-            allOrders.forEach(o => {
-              console.log(`     - Order ${o.id}:`, {
-                placed_on: o.placed_on,
-                status: o.status,
-                is_active: o.is_active,
-                created_at: o.created_at,
-                matches_so: o.placed_on === so.id
-              });
-            });
-          }
         }
       }
     }
 
-    console.log(`\n✅ FINAL: Returning ${dealerOrdersData.length} dealers with orders`);
     return dealerOrdersData;
   } catch (error) {
-    console.log(`❌ getDealerWiseOrdersForExcel error: ${error.message}`);
-    console.log(`❌ Stack trace: ${error.stack}`);
+    logger.error(`getDealerWiseOrdersForExcel error: ${error.message}`);
     throw error;
   }
 }
 
-  static async getDealerWisePendingForExcel(userId, filter = {}) {
-    try {
-      const salesOfficers = await this.getSalesOfficersUnderUser(userId);
-      const dealerPendingData = [];
+/* =====================================================
+   HELPER: GET DEALER-WISE PENDING AMOUNTS FOR EXCEL
+   ✅ No changes needed for this method
+====================================================== */
+static async getDealerWisePendingForExcel(userId, filter = {}) {
+  try {
+    const salesOfficers = await this.getSalesOfficersUnderUser(userId);
+    const dealerPendingData = [];
 
-      for (const so of salesOfficers) {
-        const dealerIds = await DealerModel.getDealersAssignedTo(so.id);
+    for (const so of salesOfficers) {
+      const dealerIds = await DealerModel.getDealersAssignedTo(so.id);
 
-        if (!dealerIds || dealerIds.length === 0) continue;
+      if (!dealerIds || dealerIds.length === 0) continue;
 
-        // Get dealer details with pending amounts
-        const { data: dealers } = await supabase
-          .from("dealers")
-          .select("id, name, dealer_code, phone, email, address, state")
-          .in("id", dealerIds)
+      // Get dealer details with pending amounts
+      const { data: dealers } = await supabase
+        .from("dealers")
+        .select("id, name, dealer_code, phone, email, address, state")
+        .in("id", dealerIds)
+        .eq("is_active", true);
+
+      for (const dealer of dealers || []) {
+        // Get pending amount for this dealer
+        const { data: pendingData } = await supabase
+          .from("dealer_pending_amounts")
+          .select("pending_amount, last_updated")
+          .eq("dealer_id", dealer.id)
+          .single();
+
+        const pendingAmount = pendingData ? Number(pendingData.pending_amount || 0) : 0;
+
+        // Get total order value (for reference)
+        let orderQuery = supabase
+          .from("orders")
+          .select("total_amount")
+          .eq("dealer_id", dealer.id)
+          .eq("placed_on", so.id)
+          .in("status", ["placed", "approved", "delivered"])
           .eq("is_active", true);
 
-        for (const dealer of dealers || []) {
-          // Get pending amount for this dealer
-          const { data: pendingData } = await supabase
-            .from("dealer_pending_amounts")
-            .select("pending_amount, last_updated")
-            .eq("dealer_id", dealer.id)
-            .single();
+        orderQuery = this.applyDateFilter(orderQuery, filter);
+        const { data: orders } = await orderQuery;
 
-          const pendingAmount = pendingData ? Number(pendingData.pending_amount || 0) : 0;
+        const totalOrderValue = (orders || []).reduce(
+          (sum, o) => sum + Number(o.total_amount || 0),
+          0
+        );
 
-          // Get total order value (for reference)
-          let orderQuery = supabase
-            .from("orders")
-            .select("total_amount")
-            .eq("dealer_id", dealer.id)
-            .eq("placed_on", so.id)
-            .in("status", ["placed", "approved", "delivered"])
-            .eq("is_active", true);
+        // Get total collected (for reference)
+        let paymentQuery = supabase
+          .from("dealer_ledger")
+          .select("amount")
+          .eq("dealer_id", dealer.id)
+          .eq("transaction_type", "payment");
 
-          orderQuery = this.applyDateFilter(orderQuery, filter);
-          const { data: orders } = await orderQuery;
+        paymentQuery = this.applyDateFilter(paymentQuery, filter);
+        const { data: payments } = await paymentQuery;
 
-          const totalOrderValue = (orders || []).reduce(
-            (sum, o) => sum + Number(o.total_amount || 0),
-            0
-          );
+        const totalCollected = (payments || []).reduce(
+          (sum, p) => sum + Math.abs(Number(p.amount || 0)),
+          0
+        );
 
-          // Get total collected (for reference)
-          let paymentQuery = supabase
-            .from("dealer_ledger")
-            .select("amount")
-            .eq("dealer_id", dealer.id)
-            .eq("transaction_type", "payment");
-
-          paymentQuery = this.applyDateFilter(paymentQuery, filter);
-          const { data: payments } = await paymentQuery;
-
-          const totalCollected = (payments || []).reduce(
-            (sum, p) => sum + Math.abs(Number(p.amount || 0)),
-            0
-          );
-
-          dealerPendingData.push({
-            so_name: so.full_name,
-            so_employee_code: so.employee_code,
-            dealer_id: dealer.id,
-            dealer_name: dealer.name,
-            dealer_code: dealer.dealer_code,
-            dealer_phone: dealer.phone,
-            dealer_email: dealer.email,
-            dealer_state: dealer.state,
-            total_order_value: totalOrderValue,
-            total_collected: totalCollected,
-            pending_amount: pendingAmount,
-            last_updated: pendingData?.last_updated || null
-          });
-        }
+        dealerPendingData.push({
+          so_name: so.full_name,
+          so_employee_code: so.employee_code,
+          dealer_id: dealer.id,
+          dealer_name: dealer.name,
+          dealer_code: dealer.dealer_code,
+          dealer_phone: dealer.phone,
+          dealer_email: dealer.email,
+          dealer_state: dealer.state,
+          total_order_value: totalOrderValue,
+          total_collected: totalCollected,
+          pending_amount: pendingAmount,
+          last_updated: pendingData?.last_updated || null
+        });
       }
-
-      // Sort by pending amount (highest first)
-      return dealerPendingData.sort((a, b) => b.pending_amount - a.pending_amount);
-    } catch (error) {
-      logger.error(`getDealerWisePendingForExcel error: ${error.message}`);
-      throw error;
     }
+
+    // Sort by pending amount (highest first)
+    return dealerPendingData.sort((a, b) => b.pending_amount - a.pending_amount);
+  } catch (error) {
+    logger.error(`getDealerWisePendingForExcel error: ${error.message}`);
+    throw error;
   }
+}
 }
 
 module.exports = AnalyticsService;
