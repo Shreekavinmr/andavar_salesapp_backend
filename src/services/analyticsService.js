@@ -436,57 +436,60 @@ class AnalyticsService {
      EXCEL EXPORT: COMPREHENSIVE REPORT
   ====================================================== */
   static async getExcelData(userId, filter = {}) {
-    try {
-      const dashboard = await this.getDashboard(userId, filter);
-      const productWise = await this.getProductWiseAnalytics(userId, filter);
+  try {
+    // ⭐ RUN INDEPENDENT QUERIES IN PARALLEL
+    const [dashboard, productWise, dealerWiseOrders, dealerWisePending] = await Promise.all([
+      this.getDashboard(userId, filter),
+      this.getProductWiseAnalytics(userId, filter),
+      this.getDealerWiseOrdersForExcel(userId, filter),
+      this.getDealerWisePendingForExcel(userId, filter)
+    ]);
+
+    // ⭐ OPTIMIZE: Fetch all SO details in parallel instead of sequentially
+    const soDetailsPromises = dashboard.sales_officers.map(async (so) => {
+      const dealerData = await this.getSoDealersDrilldown(so.so_id, filter);
       
-      // NEW: Get dealer-wise orders for consolidated sheet
-      const dealerWiseOrders = await this.getDealerWiseOrdersForExcel(userId, filter);
+      // ⭐ OPTIMIZE: Fetch all dealer details in parallel
+      const dealersWithDetailsPromises = dealerData.dealers.map(async (dealer) => {
+        const [orders, payments] = await Promise.all([
+          this.getDealerOrderDetails(dealer.dealer_id, so.so_id, filter),
+          this.getDealerPaymentDetails(dealer.dealer_id, filter)
+        ]);
+        
+        return {
+          ...dealer,
+          orders: orders,
+          payments: payments,
+        };
+      });
       
-      // NEW: Get dealer-wise pending amounts
-      const dealerWisePending = await this.getDealerWisePendingForExcel(userId, filter);
-
-      // Get detailed data for each SO with orders and payments (existing)
-      const soDetails = [];
-
-      for (const so of dashboard.sales_officers) {
-        const dealerData = await this.getSoDealersDrilldown(so.so_id, filter);
-        
-        const dealersWithDetails = [];
-        
-        for (const dealer of dealerData.dealers) {
-          const orders = await this.getDealerOrderDetails(dealer.dealer_id, so.so_id, filter);
-          const payments = await this.getDealerPaymentDetails(dealer.dealer_id, filter);
-          
-          dealersWithDetails.push({
-            ...dealer,
-            orders: orders,
-            payments: payments,
-          });
-        }
-        
-        soDetails.push({
-          so_info: so,
-          dealers: dealersWithDetails,
-        });
-      }
-
+      const dealersWithDetails = await Promise.all(dealersWithDetailsPromises);
+      
       return {
-        overall: dashboard.overall,
-        sales_officers: dashboard.sales_officers,
-        so_details: soDetails,
-        product_wise: productWise,
-        dealer_wise_orders: dealerWiseOrders,  // NEW
-        dealer_wise_pending: dealerWisePending, // NEW
-        filter: filter,
-        generated_at: new Date().toISOString(),
-        generated_by: userId,
+        so_info: so,
+        dealers: dealersWithDetails,
       };
-    } catch (error) {
-      logger.error(`getExcelData error: ${error.message}`);
-      throw error;
-    }
+    });
+
+    const soDetails = await Promise.all(soDetailsPromises);
+
+    return {
+      overall: dashboard.overall,
+      sales_officers: dashboard.sales_officers,
+      so_details: soDetails,
+      product_wise: productWise,
+      dealer_wise_orders: dealerWiseOrders,
+      dealer_wise_pending: dealerWisePending,
+      filter: filter,
+      generated_at: new Date().toISOString(),
+      generated_by: userId,
+    };
+  } catch (error) {
+    logger.error(`getExcelData error: ${error.message}`);
+    throw error;
   }
+}
+
 
 static async getHomeStats(userId, filter = {}) {
   try {
@@ -678,16 +681,16 @@ static async getHomeStats(userId, filter = {}) {
       throw error;
     }
   }
-  
+
   static async getDealerWiseOrdersForExcel(userId, filter = {}) {
   try {
     const salesOfficers = await this.getSalesOfficersUnderUser(userId);
-    const dealerOrdersData = [];
-
-    for (const so of salesOfficers) {
+    
+    // ⭐ OPTIMIZE: Process all SOs in parallel
+    const dealerOrdersPromises = salesOfficers.map(async (so) => {
       const dealerIds = await DealerModel.getDealersAssignedTo(so.id);
 
-      if (!dealerIds || dealerIds.length === 0) continue;
+      if (!dealerIds || dealerIds.length === 0) return [];
 
       // Get dealer details
       const { data: dealers } = await supabase
@@ -696,9 +699,8 @@ static async getHomeStats(userId, filter = {}) {
         .in("id", dealerIds)
         .eq("is_active", true);
 
-      for (const dealer of dealers || []) {
-        // Get orders for this dealer with product details
-        // ✅ REMOVED order_number from SELECT
+      // ⭐ OPTIMIZE: Process all dealers in parallel
+      const dealerDataPromises = (dealers || []).map(async (dealer) => {
         let orderQuery = supabase
           .from("orders")
           .select(`
@@ -724,7 +726,7 @@ static async getHomeStats(userId, filter = {}) {
         const { data: orders } = await orderQuery.order("created_at", { ascending: false });
 
         if (orders && orders.length > 0) {
-          dealerOrdersData.push({
+          return {
             so_name: so.full_name,
             so_employee_code: so.employee_code,
             dealer_id: dealer.id,
@@ -736,7 +738,7 @@ static async getHomeStats(userId, filter = {}) {
             dealer_state: dealer.state,
             orders: orders.map(order => ({
               order_id: order.id,
-              order_number: order.id.substring(0, 8), // ✅ Generate order number from ID
+              order_number: order.id.substring(0, 8),
               order_date: order.created_at,
               total_amount: order.total_amount,
               status: order.status,
@@ -749,12 +751,17 @@ static async getHomeStats(userId, filter = {}) {
                 amount: line.amount
               }))
             }))
-          });
+          };
         }
-      }
-    }
+        return null;
+      });
 
-    return dealerOrdersData;
+      const dealerData = await Promise.all(dealerDataPromises);
+      return dealerData.filter(d => d !== null);
+    });
+
+    const allDealerOrders = await Promise.all(dealerOrdersPromises);
+    return allDealerOrders.flat();
   } catch (error) {
     logger.error(`getDealerWiseOrdersForExcel error: ${error.message}`);
     throw error;
@@ -768,63 +775,71 @@ static async getHomeStats(userId, filter = {}) {
 static async getDealerWisePendingForExcel(userId, filter = {}) {
   try {
     const salesOfficers = await this.getSalesOfficersUnderUser(userId);
-    const dealerPendingData = [];
-
-    for (const so of salesOfficers) {
+    
+    // ⭐ OPTIMIZE: Process all SOs in parallel
+    const dealerPendingPromises = salesOfficers.map(async (so) => {
       const dealerIds = await DealerModel.getDealersAssignedTo(so.id);
 
-      if (!dealerIds || dealerIds.length === 0) continue;
+      if (!dealerIds || dealerIds.length === 0) return [];
 
-      // Get dealer details with pending amounts
+      // Get dealer details
       const { data: dealers } = await supabase
         .from("dealers")
         .select("id, name, dealer_code, phone, email, address, state")
         .in("id", dealerIds)
         .eq("is_active", true);
 
-      for (const dealer of dealers || []) {
-        // Get pending amount for this dealer
-        const { data: pendingData } = await supabase
-          .from("dealer_pending_amounts")
-          .select("pending_amount, last_updated")
-          .eq("dealer_id", dealer.id)
-          .single();
+      // ⭐ OPTIMIZE: Process all dealers in parallel
+      const dealerDataPromises = (dealers || []).map(async (dealer) => {
+        // ⭐ OPTIMIZE: Run all 3 queries in parallel
+        const [pendingResult, ordersResult, paymentsResult] = await Promise.all([
+          // Get pending amount
+          supabase
+            .from("dealer_pending_amounts")
+            .select("pending_amount, last_updated")
+            .eq("dealer_id", dealer.id)
+            .single(),
+          
+          // Get total order value
+          (async () => {
+            let orderQuery = supabase
+              .from("orders")
+              .select("total_amount")
+              .eq("dealer_id", dealer.id)
+              .eq("placed_on", so.id)
+              .in("status", ["placed", "approved", "delivered"])
+              .eq("is_active", true);
 
-        const pendingAmount = pendingData ? Number(pendingData.pending_amount || 0) : 0;
+            orderQuery = this.applyDateFilter(orderQuery, filter);
+            return await orderQuery;
+          })(),
+          
+          // Get total collected
+          (async () => {
+            let paymentQuery = supabase
+              .from("dealer_ledger")
+              .select("amount")
+              .eq("dealer_id", dealer.id)
+              .eq("transaction_type", "payment");
 
-        // Get total order value (for reference)
-        let orderQuery = supabase
-          .from("orders")
-          .select("total_amount")
-          .eq("dealer_id", dealer.id)
-          .eq("placed_on", so.id)
-          .in("status", ["placed", "approved", "delivered"])
-          .eq("is_active", true);
+            paymentQuery = this.applyDateFilter(paymentQuery, filter);
+            return await paymentQuery;
+          })()
+        ]);
 
-        orderQuery = this.applyDateFilter(orderQuery, filter);
-        const { data: orders } = await orderQuery;
-
-        const totalOrderValue = (orders || []).reduce(
+        const pendingAmount = pendingResult.data ? Number(pendingResult.data.pending_amount || 0) : 0;
+        
+        const totalOrderValue = (ordersResult.data || []).reduce(
           (sum, o) => sum + Number(o.total_amount || 0),
           0
         );
 
-        // Get total collected (for reference)
-        let paymentQuery = supabase
-          .from("dealer_ledger")
-          .select("amount")
-          .eq("dealer_id", dealer.id)
-          .eq("transaction_type", "payment");
-
-        paymentQuery = this.applyDateFilter(paymentQuery, filter);
-        const { data: payments } = await paymentQuery;
-
-        const totalCollected = (payments || []).reduce(
+        const totalCollected = (paymentsResult.data || []).reduce(
           (sum, p) => sum + Math.abs(Number(p.amount || 0)),
           0
         );
 
-        dealerPendingData.push({
+        return {
           so_name: so.full_name,
           so_employee_code: so.employee_code,
           dealer_id: dealer.id,
@@ -836,13 +851,18 @@ static async getDealerWisePendingForExcel(userId, filter = {}) {
           total_order_value: totalOrderValue,
           total_collected: totalCollected,
           pending_amount: pendingAmount,
-          last_updated: pendingData?.last_updated || null
-        });
-      }
-    }
+          last_updated: pendingResult.data?.last_updated || null
+        };
+      });
 
+      return await Promise.all(dealerDataPromises);
+    });
+
+    const allDealerPending = await Promise.all(dealerPendingPromises);
+    const flattenedData = allDealerPending.flat();
+    
     // Sort by pending amount (highest first)
-    return dealerPendingData.sort((a, b) => b.pending_amount - a.pending_amount);
+    return flattenedData.sort((a, b) => b.pending_amount - a.pending_amount);
   } catch (error) {
     logger.error(`getDealerWisePendingForExcel error: ${error.message}`);
     throw error;
