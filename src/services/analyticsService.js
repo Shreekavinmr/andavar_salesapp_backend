@@ -487,7 +487,7 @@ class AnalyticsService {
       throw error;
     }
   }
-  
+
 static async getHomeStats(userId, filter = {}) {
   try {
     const role = await this.getUserRole(userId);
@@ -678,87 +678,163 @@ static async getHomeStats(userId, filter = {}) {
       throw error;
     }
   }
-   static async getDealerWiseOrdersForExcel(userId, filter = {}) {
-    try {
-      const salesOfficers = await this.getSalesOfficersUnderUser(userId);
-      const dealerOrdersData = [];
+  static async getDealerWiseOrdersForExcel(userId, filter = {}) {
+  try {
+    console.log('🔍 DEBUG: Starting getDealerWiseOrdersForExcel...');
+    console.log(`🔍 DEBUG: userId = ${userId}, filter = ${JSON.stringify(filter)}`);
+    
+    const salesOfficers = await this.getSalesOfficersUnderUser(userId);
+    console.log(`🔍 DEBUG: Found ${salesOfficers.length} sales officers`);
+    if (salesOfficers.length > 0) {
+      console.log(`🔍 DEBUG: First SO: ${JSON.stringify({
+        id: salesOfficers[0].id,
+        name: salesOfficers[0].full_name,
+        code: salesOfficers[0].employee_code
+      })}`);
+    }
 
-      for (const so of salesOfficers) {
-        const dealerIds = await DealerModel.getDealersAssignedTo(so.id);
+        
+    const dealerOrdersData = [];
 
-        if (!dealerIds || dealerIds.length === 0) continue;
+    for (const so of salesOfficers) {
+      console.log(`\n🔍 DEBUG: Processing SO: ${so.full_name} (${so.id})`);
+      
+      const dealerIds = await DealerModel.getDealersAssignedTo(so.id);
+      console.log(`🔍 DEBUG: SO ${so.full_name} has ${dealerIds?.length || 0} dealers assigned`);
 
-        // Get dealer details
-        const { data: dealers } = await supabase
-          .from("dealers")
-          .select("id, name, dealer_code, phone, email, address, state")
-          .in("id", dealerIds)
+      if (!dealerIds || dealerIds.length === 0) {
+        console.log(`⚠️ WARNING: No dealers for SO ${so.full_name}`);
+        continue;
+      }
+
+      // Get dealer details
+      const { data: dealers, error: dealersError } = await supabase
+        .from("dealers")
+        .select("id, name, dealer_code, phone, email, address, state")
+        .in("id", dealerIds)
+        .eq("is_active", true);
+
+      if (dealersError) {
+        console.log(`❌ Error fetching dealers: ${dealersError.message}`);
+        continue;
+      }
+
+      console.log(`🔍 DEBUG: Found ${dealers?.length || 0} active dealers for SO ${so.full_name}`);
+
+      for (const dealer of dealers || []) {
+        console.log(`\n  🔍 DEBUG: Checking dealer: ${dealer.name} (${dealer.id})`);
+        
+        // Get orders for this dealer with product details
+        let orderQuery = supabase
+          .from("orders")
+          .select(`
+            id,
+            order_number,
+            created_at,
+            total_amount,
+            status,
+            notes,
+            order_lines (
+              id,
+              product_name,
+              quantity,
+              case_type,
+              unit_price,
+              amount
+            )
+          `)
+          .eq("dealer_id", dealer.id)
+          .eq("placed_on", so.id)
           .eq("is_active", true);
 
-        for (const dealer of dealers || []) {
-          // Get orders for this dealer with product details
-          let orderQuery = supabase
-            .from("orders")
-            .select(`
-              id,
-              order_number,
-              created_at,
-              total_amount,
-              status,
-              notes,
-              order_lines (
-                id,
-                product_name,
-                quantity,
-                case_type,
-                unit_price,
-                amount
-              )
-            `)
-            .eq("dealer_id", dealer.id)
-            .eq("placed_on", so.id)
-            .eq("is_active", true);
+        console.log(`  🔍 DEBUG: Query conditions: dealer_id=${dealer.id}, placed_on=${so.id}, is_active=true`);
+        console.log(`  🔍 DEBUG: Filter to apply: ${JSON.stringify(filter)}`);
 
-          orderQuery = this.applyDateFilter(orderQuery, filter);
-          const { data: orders } = await orderQuery.order("created_at", { ascending: false });
+        orderQuery = this.applyDateFilter(orderQuery, filter);
+        const { data: orders, error: ordersError } = await orderQuery.order("created_at", { ascending: false });
 
-          if (orders && orders.length > 0) {
-            dealerOrdersData.push({
-              so_name: so.full_name,
-              so_employee_code: so.employee_code,
-              dealer_id: dealer.id,
-              dealer_name: dealer.name,
-              dealer_code: dealer.dealer_code,
-              dealer_phone: dealer.phone,
-              dealer_email: dealer.email,
-              dealer_address: dealer.address,
-              dealer_state: dealer.state,
-              orders: orders.map(order => ({
-                order_id: order.id,
-                order_number: order.order_number,
-                order_date: order.created_at,
-                total_amount: order.total_amount,
-                status: order.status,
-                notes: order.notes,
-                products: (order.order_lines || []).map(line => ({
-                  product_name: line.product_name,
-                  quantity: line.quantity,
-                  case_type: line.case_type,
-                  unit_price: line.unit_price,
-                  amount: line.amount
-                }))
+        if (ordersError) {
+          console.log(`  ❌ Error fetching orders for dealer ${dealer.name}: ${ordersError.message}`);
+          continue;
+        }
+
+        console.log(`  🔍 DEBUG: Found ${orders?.length || 0} orders for dealer ${dealer.name}`);
+        
+        if (orders && orders.length > 0) {
+          console.log(`  ✅ Adding dealer ${dealer.name} with ${orders.length} orders to report`);
+          
+          // Log first order details for debugging
+          if (orders[0]) {
+            console.log(`  🔍 DEBUG: First order sample:`, {
+              id: orders[0].id,
+              order_number: orders[0].order_number,
+              status: orders[0].status,
+              created_at: orders[0].created_at,
+              products_count: orders[0].order_lines?.length || 0
+            });
+          }
+          
+          dealerOrdersData.push({
+            so_name: so.full_name,
+            so_employee_code: so.employee_code,
+            dealer_id: dealer.id,
+            dealer_name: dealer.name,
+            dealer_code: dealer.dealer_code,
+            dealer_phone: dealer.phone,
+            dealer_email: dealer.email,
+            dealer_address: dealer.address,
+            dealer_state: dealer.state,
+            orders: orders.map(order => ({
+              order_id: order.id,
+              order_number: order.order_number,
+              order_date: order.created_at,
+              total_amount: order.total_amount,
+              status: order.status,
+              notes: order.notes,
+              products: (order.order_lines || []).map(line => ({
+                product_name: line.product_name,
+                quantity: line.quantity,
+                case_type: line.case_type,
+                unit_price: line.unit_price,
+                amount: line.amount
               }))
+            }))
+          });
+        } else {
+          console.log(`  ⚠️ WARNING: No orders found for dealer ${dealer.name} with current filters`);
+          
+          // 🔍 DEBUG: Check if orders exist WITHOUT filters
+          console.log(`  🔍 DEBUG: Checking without filters...`);
+          const { data: allOrders, error: allOrdersError } = await supabase
+            .from("orders")
+            .select("id, placed_on, status, is_active, created_at")
+            .eq("dealer_id", dealer.id)
+            .limit(5);
+          
+          if (!allOrdersError && allOrders) {
+            console.log(`  🔍 DEBUG: Dealer has ${allOrders.length} total orders (no filters):`);
+            allOrders.forEach(o => {
+              console.log(`     - Order ${o.id}:`, {
+                placed_on: o.placed_on,
+                status: o.status,
+                is_active: o.is_active,
+                created_at: o.created_at,
+                matches_so: o.placed_on === so.id
+              });
             });
           }
         }
       }
-
-      return dealerOrdersData;
-    } catch (error) {
-      logger.error(`getDealerWiseOrdersForExcel error: ${error.message}`);
-      throw error;
     }
+
+    console.log(`\n✅ FINAL: Returning ${dealerOrdersData.length} dealers with orders`);
+    return dealerOrdersData;
+  } catch (error) {
+    console.log(`❌ getDealerWiseOrdersForExcel error: ${error.message}`);
+    console.log(`❌ Stack trace: ${error.stack}`);
+    throw error;
   }
+}
 
   static async getDealerWisePendingForExcel(userId, filter = {}) {
     try {
