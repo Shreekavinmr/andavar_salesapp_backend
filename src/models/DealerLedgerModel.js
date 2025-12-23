@@ -246,6 +246,41 @@ class DealerLedgerModel {
     // if willExceed true => cannot place (approval required)
     return !willExceed;
   }
+
+  static async recordReturnCashback(dealerId, amount, orderId, returnRequestId, createdBy) {
+  const { data: ledgerData, error: ledgerError } = await supabase
+    .from("dealer_ledger")
+    .insert({
+      dealer_id: dealerId,
+      transaction_type: "return_cashback",
+      amount: -Math.abs(amount), // NEGATIVE (credit to dealer)
+      reference_type: "return_request",
+      reference_id: returnRequestId,
+      description: `Return cashback for order ${orderId}, return request ${returnRequestId}`,
+      created_by: createdBy,
+      created_at: new Date().toISOString(),
+    })
+    .select()
+    .single();
+
+  if (ledgerError) throw new Error(ledgerError.message);
+
+  // Update pending_amounts (decrease)
+  const currentPending = await this.getDealerPendingAmount(dealerId);
+  const newPending = currentPending - Math.abs(amount);
+
+  await supabase
+    .from("dealer_pending_amounts")
+    .upsert(
+      {
+        dealer_id: dealerId,
+        pending_amount: newPending,
+      },
+      { onConflict: "dealer_id" }
+    );
+
+  return ledgerData;
+}
 }
 
 module.exports = DealerLedgerModel;

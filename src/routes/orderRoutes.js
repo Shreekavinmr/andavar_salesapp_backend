@@ -3,6 +3,7 @@ const express = require('express');
 const OrderController = require('../controllers/OrderController');
 const { authenticateToken, requireAdmin } = require('../middleware/auth'); // use authenticateToken for auth
 const router = express.Router();
+const OrderReturnController = require('../controllers/OrderReturnController');
 
 // Create order (authenticated)
 router.post('/orders', authenticateToken, OrderController.createOrder);
@@ -33,6 +34,36 @@ router.get('/admin/orders/:orderId/details',
       sendResponse(res, 400, error.message);
     }
   }
+);
+
+router.post('/orders/:orderId/return-request', 
+  authenticateToken, 
+  OrderReturnController.createReturnRequest
+);
+
+router.get('/orders/:orderId/return-requests', 
+  authenticateToken, 
+  OrderReturnController.getOrderReturnRequests
+);
+
+router.get('/return-requests', 
+  authenticateToken, 
+  OrderReturnController.listReturnRequests
+);
+
+router.get('/return-requests/:id', 
+  authenticateToken, 
+  OrderReturnController.getReturnRequest
+);
+
+router.post('/return-requests/:id/approve', 
+  authenticateToken, 
+  OrderReturnController.approveReturnRequest
+);
+
+router.post('/return-requests/:id/reject', 
+  authenticateToken, 
+  OrderReturnController.rejectReturnRequest
 );
 
 module.exports = router;

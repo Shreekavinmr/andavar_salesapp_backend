@@ -114,44 +114,52 @@ class OrderService {
   }
 
   static async markDelivered(orderId, updater) {
-    try {
-      if (!updater || !updater.id) throw new Error('updater required');
+  try {
+    if (!updater || !updater.id) throw new Error('updater required');
 
-      const order = await OrderModel.getOrderById(orderId);
-      if (!order) throw new Error('Order not found');
+    const order = await OrderModel.getOrderById(orderId);
+    if (!order) throw new Error('Order not found');
 
-      if (order.status !== 'approved') {
-        throw new Error(`Order must be approved to mark delivered. Current: ${order.status}`);
-      }
+    if (order.status !== 'approved') {
+      throw new Error(`Order must be approved to mark delivered. Current: ${order.status}`);
+    }
 
-      const role = await DealerModel.getRoleName(updater.id);
-      const isMidHighApprover = ['asm', 'rsm', 'gm', 'owner', 'admin'].includes(role);
-      const placedOn = order.placed_on;
-      const canUpdate = isMidHighApprover || (placedOn && placedOn === updater.id);
-      if (!canUpdate) throw new Error('Not authorized to mark delivered');
+    // CHECK FOR PENDING RETURNS
+    const OrderReturnModel = require('../models/OrderReturnModel');
+    const hasPendingReturns = await OrderReturnModel.hasPendingReturns(orderId);
+    if (hasPendingReturns) {
+      throw new Error('Cannot mark order as delivered. There are pending return requests for this order.');
+    }
 
-      const updated = await OrderModel.updateOrderStatus(orderId, 'delivered', updater.id);
+    const role = await DealerModel.getRoleName(updater.id);
+    const isMidHighApprover = ['asm', 'rsm', 'gm', 'owner', 'admin'].includes(role);
+    const placedOn = order.placed_on;
+    const canUpdate = isMidHighApprover || (placedOn && placedOn === updater.id);
+    if (!canUpdate) throw new Error('Not authorized to mark delivered');
 
-      // Optional: If delivered = paid, record payment (negative ledger)
-      // await DealerLedgerModel.recordPayment(order.dealer_id, order.total_amount, `delivered_${orderId}`, updater.id);
+    const updated = await OrderModel.updateOrderStatus(orderId, 'delivered', updater.id);
 
-      return { success: true, order: updated };
-    } catch (err) {
-      logger.error(`OrderService.markDelivered error: ${err.message}`);
-      throw err;
+    return { success: true, order: updated };
+  } catch (err) {
+    logger.error(`OrderService.markDelivered error: ${err.message}`);
+    throw err;
+  }
+}
+
+  static async getOrders(filter = {}, options = {}, actor) {
+  const data = await OrderModel.listOrders(filter, options, actor.id);
+
+  // Enrich only pending approval
+  for (const order of data.rows) {
+    if (order.status === 'pending_approval' && order.dealer_id) {
+      order.current_outstanding =
+        await DealerLedgerModel.getDealerPendingAmount(order.dealer_id);
     }
   }
 
-  static async getOrders(filter = {}, options = {}) {
-    const data = await OrderModel.listOrders(filter, options);
-    // Enrich with current_outstanding only for pending_approval (perf)
-    for (const order of data.rows) {
-      if (order.status === 'pending_approval' && order.dealer_id) {
-        order.current_outstanding = await DealerLedgerModel.getDealerPendingAmount(order.dealer_id);
-      }
-    }
-    return data;
-  }
+  return data;
+}
+
 
   static async getOrder(orderId) {
     return await OrderModel.getOrderById(orderId);

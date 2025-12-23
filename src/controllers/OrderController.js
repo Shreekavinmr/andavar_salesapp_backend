@@ -31,22 +31,30 @@ class OrderController {
 
   // GET /orders (list)
   static async listOrders(req, res) {
-    try {
-      const filter = {
-        dealer_id: req.query.dealer_id,
-        status: req.query.status,
-        created_by: req.query.created_by,
-        placed_on: req.query.placed_on,
-        q: req.query.q
-      };
-      const options = { page: req.query.page || 1, limit: req.query.limit || 50 };
-      const data = await OrderService.getOrders(filter, options);
-      sendResponse(res, 200, 'Orders fetched', { orders: data.rows, total: data.total });
-    } catch (e) {
-      logger.error(`OrderController.listOrders error: ${e.message}`);
-      sendResponse(res, 400, e.message);
-    }
+  try {
+    const filter = {
+      dealer_id: req.query.dealer_id,
+      status: req.query.status,
+      q: req.query.q,
+    };
+
+    const options = {
+      page: req.query.page || 1,
+      limit: req.query.limit || 50,
+    };
+
+    const data = await OrderService.getOrders(filter, options, req.user);
+
+    sendResponse(res, 200, 'Orders fetched', {
+      orders: data.rows,
+      total: data.total,
+    });
+  } catch (e) {
+    logger.error(`OrderController.listOrders error: ${e.message}`);
+    sendResponse(res, 400, e.message);
   }
+}
+
 
   // POST /orders/:id/approve
   static async approveOrder(req, res) {

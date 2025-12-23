@@ -1,5 +1,6 @@
 const supabase = require('../config/supabase');
 const logger = require('../utils/logger');
+const DealerModel = require('./dealerModel');
 
 const isValidUUID = (str) => {
   if (!str) return false;
@@ -125,32 +126,68 @@ class OrderModel {
     return data;
   }
 
-  static async listOrders(filter = {}, options = {}) {
-    let q = supabase.from('orders').select(`
-        *,
-        order_lines:order_lines(*),
-        dealer:dealers!orders_dealer_id_fkey(id, name, phone,state, address, pincode),
-        created_by_profile:profiles_onboard!orders_created_by_fkey(id, full_name, email, phone, role),
-        placed_on_profile:profiles_onboard!orders_placed_on_fkey(id, full_name, email, phone, role)
-      `, { count: 'exact' }).eq('is_active', true);
+  static async listOrders(filter = {}, options = {}, actorId) {
+  if (!actorId) throw new Error('actorId required');
 
-    if (filter.dealer_id && isValidUUID(filter.dealer_id)) q = q.eq('dealer_id', filter.dealer_id);
-    if (filter.status) q = q.eq('status', filter.status);
-    if (filter.created_by && isValidUUID(filter.created_by)) q = q.eq('created_by', filter.created_by);
-    if (filter.placed_on && isValidUUID(filter.placed_on)) q = q.eq('placed_on', filter.placed_on);
-    if (filter.q) {
-      const s = filter.q.toString();
-      q = q.or(`notes.ilike.%${s}%`);
-    }
+  const role = await DealerModel.getRoleName(actorId);
 
-    const page = parseInt(options.page || 1, 10) >= 1 ? parseInt(options.page || 1, 10) : 1;
-    const limit = Math.min(parseInt(options.limit || 50, 10), 500);
-    const from = (page - 1) * limit, to = from + limit - 1;
+  let q = supabase
+    .from('orders')
+    .select(`
+      *,
+      order_lines:order_lines(*),
+      dealer:dealers!orders_dealer_id_fkey(id, name, phone, state, address, pincode),
+      created_by_profile:profiles_onboard!orders_created_by_fkey(id, full_name, email, phone, role),
+      placed_on_profile:profiles_onboard!orders_placed_on_fkey(id, full_name, email, phone, role)
+    `, { count: 'exact' })
+    .eq('is_active', true);
 
-    const { data, error, count } = await q.order('created_at', { ascending: false }).range(from, to);
-    if (error) throw new Error(error.message);
-    return { rows: data || [], total: typeof count === 'number' ? count : (data ? data.length : 0), page, limit };
+  // ---------------------------------------
+  // 🔐 VISIBILITY RULES
+  // ---------------------------------------
+
+  if (!['gm', 'owner', 'admin'].includes(role)) {
+    // Get downward hierarchy
+    const reportees = await DealerModel.getAllReportees(actorId);
+
+    // Only SOs (placed_on is always SO)
+    const visibleUsers = [actorId, ...reportees];
+
+    q = q.in('placed_on', visibleUsers);
   }
+
+  // ---------------------------------------
+  // Existing filters
+  // ---------------------------------------
+  if (filter.dealer_id) q = q.eq('dealer_id', filter.dealer_id);
+  if (filter.status) q = q.eq('status', filter.status);
+  if (filter.q) {
+    const s = filter.q.toString();
+    q = q.or(`notes.ilike.%${s}%`);
+  }
+
+  // ---------------------------------------
+  // Pagination
+  // ---------------------------------------
+  const page = parseInt(options.page || 1, 10);
+  const limit = Math.min(parseInt(options.limit || 50, 10), 500);
+  const from = (page - 1) * limit;
+  const to = from + limit - 1;
+
+  const { data, error, count } = await q
+    .order('created_at', { ascending: false })
+    .range(from, to);
+
+  if (error) throw new Error(error.message);
+
+  return {
+    rows: data || [],
+    total: typeof count === 'number' ? count : (data?.length || 0),
+    page,
+    limit,
+  };
+}
+
 
   static async createApprovalRecord(orderId, approverId, action, comment = null) {
     if (!isValidUUID(orderId)) throw new Error('Invalid orderId UUID');
