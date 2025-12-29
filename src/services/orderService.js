@@ -46,7 +46,7 @@ class OrderService {
 
       // If 'placed' (no approval needed), add to ledger and update pending_amounts
       if (status === 'placed') {
-        await DealerLedgerModel.recordOrderCharge(payload.dealer_id, total, created.id, actor.id);
+        await DealerLedgerModel.recordOrderCharge(payload.dealer_id, total, created.id, actor.id,created.product_type);
       }
 
       return {
@@ -79,7 +79,7 @@ class OrderService {
       await OrderModel.createApprovalRecord(orderId, approver.id, 'approved', null);
 
       // NOW record to ledger (outstanding charge on approval)
-      await DealerLedgerModel.recordOrderCharge(order.dealer_id, order.total_amount, orderId, approver.id);
+      await DealerLedgerModel.recordOrderCharge(order.dealer_id, order.total_amount, orderId, approver.id,order.product_type);
 
       return { success: true, order: updated };
     } catch (err) {

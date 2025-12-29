@@ -115,7 +115,8 @@ class AnalyticsService {
         .in("status", ["placed", "approved", "delivered"])
         .eq("is_active", true);
 
-      orderQuery = this.applyDateFilter(orderQuery, filter);
+      
+orderQuery = this.applyProductFilter(orderQuery, filter);
       const { data: orders, error: ordersError } = await orderQuery;
 
       if (ordersError) {
@@ -283,7 +284,7 @@ class AnalyticsService {
           .in("status", ["placed", "approved", "delivered"])
           .eq("is_active", true);
 
-        orderQuery = this.applyDateFilter(orderQuery, filter);
+        orderQuery = this.applyProductFilter(orderQuery, filter);
         const { data: orders } = await orderQuery;
 
         const ordersCount = orders?.length || 0;
@@ -308,13 +309,17 @@ class AnalyticsService {
         );
 
         // Pending amount for this dealer
-        const { data: pendingData } = await supabase
-          .from("dealer_pending_amounts")
-          .select("pending_amount")
-          .eq("dealer_id", dealer.id)
-          .single();
+       const { data: pendingData } = await supabase
+  .from("dealer_pending_amounts")
+  .select("pending_amount")
+  .eq("dealer_id", dealer.id)
 
-        const pending = pendingData ? Number(pendingData.pending_amount || 0) : 0;
+const pending = (pendingData || []).reduce(
+  (sum, p) => sum + Number(p.pending_amount || 0),
+  0
+);
+
+
 
         dealerMetrics.push({
           dealer_id: dealer.id,
@@ -361,7 +366,7 @@ class AnalyticsService {
         .in("status", ["placed", "approved", "delivered"])
         .eq("is_active", true);
 
-      orderQuery = this.applyDateFilter(orderQuery, filter);
+      orderQuery = this.applyProductFilter(orderQuery, filter);
       const { data: orders } = await orderQuery;
 
       if (!orders || orders.length === 0) {
@@ -627,7 +632,7 @@ static async getHomeStats(userId, filter = {}) {
         .eq("placed_on", soId)
         .eq("is_active", true);
 
-      orderQuery = this.applyDateFilter(orderQuery, filter);
+      orderQuery = this.applyProductFilter(orderQuery, filter);
       const { data: orders, error } = await orderQuery.order("created_at", { ascending: false });
 
       if (error) throw new Error(error.message);
@@ -722,7 +727,7 @@ static async getHomeStats(userId, filter = {}) {
           .eq("placed_on", so.id)
           .eq("is_active", true);
 
-        orderQuery = this.applyDateFilter(orderQuery, filter);
+        orderQuery = this.applyProductFilter(orderQuery, filter);
         const { data: orders } = await orderQuery.order("created_at", { ascending: false });
 
         if (orders && orders.length > 0) {
@@ -810,7 +815,7 @@ static async getDealerWisePendingForExcel(userId, filter = {}) {
               .in("status", ["placed", "approved", "delivered"])
               .eq("is_active", true);
 
-            orderQuery = this.applyDateFilter(orderQuery, filter);
+            orderQuery = this.applyProductFilter(orderQuery, filter);
             return await orderQuery;
           })(),
           
@@ -868,6 +873,14 @@ static async getDealerWisePendingForExcel(userId, filter = {}) {
     throw error;
   }
 }
+static applyProductFilter(query, filter = {}) {
+  if (filter.product_type && filter.product_type !== "all") {
+    return query.eq("product_type", filter.product_type);
+  }
+  return query;
+}
+
+
 }
 
 module.exports = AnalyticsService;

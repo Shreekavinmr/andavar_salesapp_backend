@@ -36,6 +36,7 @@ class OrderController {
       dealer_id: req.query.dealer_id,
       status: req.query.status,
       q: req.query.q,
+      product_type: req.query.product_type,
     };
 
     const options = {

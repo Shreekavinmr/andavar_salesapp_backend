@@ -45,6 +45,7 @@ class AdminDealerLedgerController {
       const options = {
         page: req.query.page,
         limit: req.query.limit,
+        product_type: req.query.product_type,
       };
 
       const result = await DealerLedgerModel.getDealerLedger(dealerId, options);

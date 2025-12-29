@@ -87,6 +87,11 @@ class DealerLedgerModel {
       .eq("dealer_id", dealerId)
       .eq("is_active", true);
 
+      if (options.product_type && options.product_type !== 'null') {
+  query = query.eq("product_type", options.product_type);
+}
+
+
     // Pagination
     const page = parseInt(options.page) || 1;
     const limit = Math.min(parseInt(options.limit) || 50, 100);
@@ -184,7 +189,7 @@ class DealerLedgerModel {
   /**
    * Record order charge to ledger (positive outstanding) - Called on place or approve
    */
-  static async recordOrderCharge(dealerId, amount, orderId, createdBy) {
+  static async recordOrderCharge(dealerId, amount, orderId, createdBy,productType ) {
   const { data: ledgerData, error: ledgerError } = await supabase
     .from("dealer_ledger")
     .insert({
@@ -196,6 +201,7 @@ class DealerLedgerModel {
       description: `Order charge for order ${orderId}`,
       created_by: createdBy,
       created_at: new Date().toISOString(),
+      product_type: productType || null,
     })
     .select()
     .single();

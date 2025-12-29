@@ -9,6 +9,50 @@ const isValidUUID = (str) => {
 
 class OrderModel {
   /**
+   * Determine product type from order lines
+   * Returns: 'water', 'juice', or 'mixed'
+   */
+  static async determineProductType(orderLines) {
+    if (!Array.isArray(orderLines) || orderLines.length === 0) {
+      return 'mixed'; // default fallback
+    }
+
+    // Get product IDs from order lines
+    const productIds = orderLines
+      .map(line => line.product_id)
+      .filter(Boolean);
+
+    if (productIds.length === 0) return 'mixed';
+
+    // Fetch product types for all products in order
+    const { data: products, error } = await supabase
+      .from('products')
+      .select('id, type_id, product_types(name)')
+      .in('id', productIds);
+
+    if (error || !products || products.length === 0) {
+      logger.warn('determineProductType: Could not fetch products', error);
+      return 'mixed';
+    }
+
+    // Extract type names
+    const types = products
+      .map(p => p.product_types?.name?.toLowerCase())
+      .filter(Boolean);
+
+    if (types.length === 0) return 'mixed';
+
+    // Check if all same type
+    const uniqueTypes = [...new Set(types)];
+    
+    if (uniqueTypes.length === 1) {
+      return uniqueTypes[0]; // 'water' or 'juice'
+    }
+
+    return 'mixed'; // Multiple types in one order
+  }
+
+  /**
    * Create order and lines in a transaction-like manner.
    */
   static async createOrder(payload) {
@@ -27,7 +71,10 @@ class OrderModel {
     if (!isValidUUID(created_by)) throw new Error('Invalid created_by UUID');
     if (placed_on && !isValidUUID(placed_on)) throw new Error('Invalid placed_on UUID');
 
-    // Insert order
+    // Determine product type from order lines
+    const product_type = await this.determineProductType(order_lines);
+
+    // Insert order with product_type
     const { data: order, error: ordErr } = await supabase
       .from('orders')
       .insert({
@@ -37,6 +84,7 @@ class OrderModel {
         status,
         total_amount,
         notes,
+        product_type, // NEW: Add product type
         created_at: new Date().toISOString()
       })
       .select()
@@ -127,67 +175,78 @@ class OrderModel {
   }
 
   static async listOrders(filter = {}, options = {}, actorId) {
-  if (!actorId) throw new Error('actorId required');
+    if (!actorId) throw new Error('actorId required');
 
-  const role = await DealerModel.getRoleName(actorId);
+    const role = await DealerModel.getRoleName(actorId);
 
-  let q = supabase
-    .from('orders')
-    .select(`
-      *,
-      order_lines:order_lines(*),
-      dealer:dealers!orders_dealer_id_fkey(id, name, phone, state, address, pincode),
-      created_by_profile:profiles_onboard!orders_created_by_fkey(id, full_name, email, phone, role),
-      placed_on_profile:profiles_onboard!orders_placed_on_fkey(id, full_name, email, phone, role)
-    `, { count: 'exact' })
-    .eq('is_active', true);
+    let q = supabase
+      .from('orders')
+      .select(`
+        *,
+        order_lines:order_lines(*),
+        dealer:dealers!orders_dealer_id_fkey(id, name, phone, state, address, pincode),
+        created_by_profile:profiles_onboard!orders_created_by_fkey(id, full_name, email, phone, role),
+        placed_on_profile:profiles_onboard!orders_placed_on_fkey(id, full_name, email, phone, role)
+      `, { count: 'exact' })
+      .eq('is_active', true);
 
-  // ---------------------------------------
-  // 🔐 VISIBILITY RULES
-  // ---------------------------------------
+    // ---------------------------------------
+    // 🔐 VISIBILITY RULES
+    // ---------------------------------------
 
-  if (!['gm', 'owner', 'admin'].includes(role)) {
-    // Get downward hierarchy
-    const reportees = await DealerModel.getAllReportees(actorId);
+    if (!['gm', 'owner', 'admin'].includes(role)) {
+      // Get downward hierarchy
+      const reportees = await DealerModel.getAllReportees(actorId);
 
-    // Only SOs (placed_on is always SO)
-    const visibleUsers = [actorId, ...reportees];
+      // Only SOs (placed_on is always SO)
+      const visibleUsers = [actorId, ...reportees];
 
-    q = q.in('placed_on', visibleUsers);
+      q = q.in('placed_on', visibleUsers);
+    }
+
+    // ---------------------------------------
+    // NEW: Product Type Filter (water/juice/mixed)
+    // ---------------------------------------
+    if (filter.product_type) {
+      const validTypes = ['water', 'juice', 'mixed'];
+      const typeFilter = filter.product_type.toLowerCase();
+      
+      if (validTypes.includes(typeFilter)) {
+        q = q.eq('product_type', typeFilter);
+      }
+    }
+
+    // ---------------------------------------
+    // Existing filters
+    // ---------------------------------------
+    if (filter.dealer_id) q = q.eq('dealer_id', filter.dealer_id);
+    if (filter.status) q = q.eq('status', filter.status);
+    if (filter.q) {
+      const s = filter.q.toString();
+      q = q.or(`notes.ilike.%${s}%`);
+    }
+
+    // ---------------------------------------
+    // Pagination
+    // ---------------------------------------
+    const page = parseInt(options.page || 1, 10);
+    const limit = Math.min(parseInt(options.limit || 50, 10), 500);
+    const from = (page - 1) * limit;
+    const to = from + limit - 1;
+
+    const { data, error, count } = await q
+      .order('created_at', { ascending: false })
+      .range(from, to);
+
+    if (error) throw new Error(error.message);
+
+    return {
+      rows: data || [],
+      total: typeof count === 'number' ? count : (data?.length || 0),
+      page,
+      limit,
+    };
   }
-
-  // ---------------------------------------
-  // Existing filters
-  // ---------------------------------------
-  if (filter.dealer_id) q = q.eq('dealer_id', filter.dealer_id);
-  if (filter.status) q = q.eq('status', filter.status);
-  if (filter.q) {
-    const s = filter.q.toString();
-    q = q.or(`notes.ilike.%${s}%`);
-  }
-
-  // ---------------------------------------
-  // Pagination
-  // ---------------------------------------
-  const page = parseInt(options.page || 1, 10);
-  const limit = Math.min(parseInt(options.limit || 50, 10), 500);
-  const from = (page - 1) * limit;
-  const to = from + limit - 1;
-
-  const { data, error, count } = await q
-    .order('created_at', { ascending: false })
-    .range(from, to);
-
-  if (error) throw new Error(error.message);
-
-  return {
-    rows: data || [],
-    total: typeof count === 'number' ? count : (data?.length || 0),
-    page,
-    limit,
-  };
-}
-
 
   static async createApprovalRecord(orderId, approverId, action, comment = null) {
     if (!isValidUUID(orderId)) throw new Error('Invalid orderId UUID');
@@ -206,6 +265,53 @@ class OrderModel {
 
     if (error) throw new Error(error.message);
     return data;
+  }
+
+  /**
+   * Get order statistics by product type
+   */
+  static async getOrderStatsByType(actorId, filter = {}) {
+    if (!actorId) throw new Error('actorId required');
+
+    const role = await DealerModel.getRoleName(actorId);
+
+    let q = supabase
+      .from('orders')
+      .select('product_type, status, total_amount', { count: 'exact' })
+      .eq('is_active', true);
+
+    // Apply same visibility rules
+    if (!['gm', 'owner', 'admin'].includes(role)) {
+      const reportees = await DealerModel.getAllReportees(actorId);
+      const visibleUsers = [actorId, ...reportees];
+      q = q.in('placed_on', visibleUsers);
+    }
+
+    // Apply date filters if provided
+    if (filter.start_date) q = q.gte('created_at', filter.start_date);
+    if (filter.end_date) q = q.lte('created_at', filter.end_date);
+    if (filter.dealer_id) q = q.eq('dealer_id', filter.dealer_id);
+
+    const { data, error } = await q;
+
+    if (error) throw new Error(error.message);
+
+    // Aggregate by type
+    const stats = {
+      water: { count: 0, total_amount: 0 },
+      juice: { count: 0, total_amount: 0 },
+      mixed: { count: 0, total_amount: 0 }
+    };
+
+    (data || []).forEach(order => {
+      const type = order.product_type || 'mixed';
+      if (stats[type]) {
+        stats[type].count++;
+        stats[type].total_amount += parseFloat(order.total_amount || 0);
+      }
+    });
+
+    return stats;
   }
 }
 

@@ -220,7 +220,8 @@ class OrderReturnService {
         request.dealer_id,
         replacementOrder.total_amount,
         replacementOrder.id,
-        approverId
+        approverId,
+        replacementOrder.product_type
       );
 
       // 4. Link replacement order to return request
