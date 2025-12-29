@@ -38,8 +38,35 @@ class DealerModel {
   }
 
   static async getAllReportees(employeeId) {
+  try {
+    // 1️⃣ Get requester role
+    const { data: requester, error: roleError } = await supabase
+      .from("profiles_onboard")
+      .select("id, role")
+      .eq("id", employeeId)
+      .single();
+
+    if (roleError || !requester) {
+      throw new Error("Unable to fetch requester role");
+    }
+
+    const role = (requester.role || "").toLowerCase();
+
+    console.log(role+'');
+    if (["gm", "owner"].includes(role)) {
+      const { data, error } = await supabase
+        .from("profiles_onboard")
+        .select("id")
+        .eq("is_active", true);
+
+      if (error) throw new Error(error.message);
+
+      return data.map((u) => u.id);
+    }
+
     const reportees = [];
     const queue = [employeeId];
+    const visited = new Set([employeeId]);
 
     while (queue.length > 0) {
       const currentId = queue.shift();
@@ -52,15 +79,23 @@ class DealerModel {
 
       if (error) throw new Error(error.message);
 
-      if (data && data.length > 0) {
-        const ids = data.map((e) => e.id);
-        reportees.push(...ids);
-        queue.push(...ids);
+      for (const emp of data || []) {
+        if (!visited.has(emp.id)) {
+          visited.add(emp.id);
+          reportees.push(emp.id);
+          queue.push(emp.id);
+        }
       }
     }
 
     return reportees;
+
+  } catch (error) {
+    logger.error(`getAllReportees error: ${error.message}`);
+    return [];
   }
+}
+
 
   static async getUpwardHierarchy(employeeId) {
     const managers = [];

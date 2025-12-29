@@ -25,7 +25,7 @@ class DealerPaymentRequestModel {
         )
       `)
       .eq("status", "pending")
-      .order("requested_at", { ascending: false });
+      .order("created_at", { ascending: false });
 
     if (error) throw new Error(error.message);
     return data;
@@ -77,7 +77,7 @@ class DealerPaymentRequestModel {
     `)
     .eq("dealer_id", dealerId)
     .eq("status", "pending")
-    .order("requested_at", { ascending: false });
+    .order("created_at", { ascending: false });
 
   if (error) throw new Error(error.message);
   return data || [];
@@ -93,7 +93,7 @@ static async getPendingRequestsByDealer(dealerId) {
     `)
     .eq("dealer_id", dealerId)
     .eq("status", "pending")
-    .order("requested_at", { ascending: false });
+    .order("created_at", { ascending: false });
 
   if (error) throw new Error(error.message);
   return data || [];

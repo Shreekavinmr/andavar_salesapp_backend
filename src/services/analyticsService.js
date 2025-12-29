@@ -553,6 +553,7 @@ static async getHomeStats(userId, filter = {}) {
       .eq("is_active", true);
 
     pendingOrderQuery = this.applyDateFilter(pendingOrderQuery, filter);
+pendingOrderQuery = this.applyProductFilter(pendingOrderQuery, filter);
     const { count: pendingOrderCount } = await pendingOrderQuery;
 
     // 4. APPROVED/DELIVERED ORDERS (with filter)
@@ -564,6 +565,7 @@ static async getHomeStats(userId, filter = {}) {
       .eq("is_active", true);
 
     approvedOrderQuery = this.applyDateFilter(approvedOrderQuery, filter);
+approvedOrderQuery = this.applyProductFilter(approvedOrderQuery, filter);
     const { count: approvedOrderCount } = await approvedOrderQuery;
 
     // 5. CASH COLLECTED (with filter)

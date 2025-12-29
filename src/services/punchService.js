@@ -272,11 +272,18 @@ class PunchService {
     const role = (reqUser?.role || "").toLowerCase();
     let allowedEmployeeIds = null;
 
-    if (!["admin", "owner", "gm"].includes(role)) {
-      const reportees = await DealerModel.getAllReportees(requestorId);
-      allowedEmployeeIds = [requestorId, ...reportees];
-    }
-
+    if (["admin", "owner", "gm"].includes(role)) {
+  allowedEmployeeIds = null; 
+}
+// MID LEVEL (RSM / ASM / Manager)
+else if (["rsm", "asm", "manager"].includes(role)) {
+  const reportees = await DealerModel.getAllReportees(requestorId);
+  allowedEmployeeIds = [requestorId, ...reportees];
+}
+// SALES OFFICER
+else {
+  allowedEmployeeIds = [requestorId];
+}
     let query = supabase
       .from("employee_daily_punches")
       .select("*")
@@ -285,8 +292,12 @@ class PunchService {
 
     if (startDate) query = query.gte("punch_date", startDate);
     if (endDate) query = query.lte("punch_date", endDate);
-    if (allowedEmployeeIds) query = query.in("employee_id", allowedEmployeeIds);
-    else if (employeeId) query = query.eq("employee_id", employeeId);
+    if (employeeId) {
+  query = query.eq("employee_id", employeeId);
+} else if (allowedEmployeeIds) {
+  query = query.in("employee_id", allowedEmployeeIds);
+}
+
 
     const { data, error } = await query;
     if (error) throw new Error("Error fetching admin report");

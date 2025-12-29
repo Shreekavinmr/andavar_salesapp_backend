@@ -86,12 +86,16 @@ class LocationService {
   static async getDailyDistance(targetUserId, date, requester) {
     const userId = targetUserId || requester.id;
 
-    if (userId !== requester.id) {
-      const reportees = await AdminService.getAllReportees(requester.id);
-      if (!reportees.includes(userId)) {
-        throw new Error("Not authorized to view this distance");
-      }
-    }
+    const role = (requester.role || '').toLowerCase();
+
+if (!["admin", "owner", "gm"].includes(role)) {
+  const reportees = await AdminService.getAllReportees(requester.id);
+
+  if (userId !== requester.id && !reportees.includes(userId)) {
+    throw new Error("Not authorized");
+  }
+}
+
 
     return await LocationModel.getDailyDistance(userId, date);
   }

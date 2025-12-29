@@ -37,43 +37,68 @@ class AdminService {
 
   // Helper: Get all reportees recursively (downward hierarchy)
   static async getAllReportees(managerId) {
-    try {
-      const reportees = [];
-      const queue = [managerId];
-      const visited = new Set([managerId]);
+  try {
+    // 1️⃣ Get requester role
+    const { data: requester, error: roleError } = await supabase
+      .from("profiles_onboard")
+      .select("id, role")
+      .eq("id", managerId)
+      .single();
 
-      while (queue.length > 0) {
-        const currentId = queue.shift();
-        
-        // Get direct reports
-        const { data, error } = await supabase
-          .from("profiles_onboard")
-          .select("id")
-          .eq("reporting_manager_id", currentId)
-          .eq("is_active", true);
+    if (roleError || !requester) {
+      throw new Error("Unable to fetch requester role");
+    }
 
-        if (error) {
-          logger.error(`Error fetching reportees for ${currentId}: ${error.message}`);
-          continue;
-        }
+    const role = (requester.role || "").toLowerCase();
 
-        if (data && data.length > 0) {
-          for (const employee of data) {
-            if (!visited.has(employee.id)) {
-              visited.add(employee.id);
-              reportees.push(employee.id);
-              queue.push(employee.id);
-            }
-          }
-        }
+    // 2️⃣ If GM or OWNER → return all active users
+    if (["gm", "owner"].includes(role)) {
+      const { data, error } = await supabase
+        .from("profiles_onboard")
+        .select("id")
+        .eq("is_active", true);
+
+      if (error) throw new Error(error.message);
+
+      return data.map(u => u.id);
+    }
+
+    // 3️⃣ Otherwise → hierarchical reportees
+    const reportees = [];
+    const queue = [managerId];
+    const visited = new Set([managerId]);
+
+    while (queue.length > 0) {
+      const currentId = queue.shift();
+
+      const { data, error } = await supabase
+        .from("profiles_onboard")
+        .select("id")
+        .eq("reporting_manager_id", currentId)
+        .eq("is_active", true);
+
+      if (error) {
+        logger.error(`Error fetching reportees for ${currentId}: ${error.message}`);
+        continue;
       }
 
-      return reportees;
-    } catch (error) {
-      logger.error(`getAllReportees error: ${error.message}`);
-      return [];
+      for (const employee of data || []) {
+        if (!visited.has(employee.id)) {
+          visited.add(employee.id);
+          reportees.push(employee.id);
+          queue.push(employee.id);
+        }
+      }
     }
+
+    return reportees;
+
+  } catch (error) {
+    logger.error(`getAllReportees error: ${error.message}`);
+    return [];
   }
+}
+
 
   // Get employees list with hierarchy filtering
   static async getEmployees(userId, options = {}) {

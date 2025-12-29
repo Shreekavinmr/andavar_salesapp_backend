@@ -30,7 +30,7 @@ class OrderService {
 
       // Approval: current_outstanding > credit_limit (irrespective of order value)
       const needsApproval = currentOutstanding > creditLimit;
-      const status = needsApproval ? 'pending_approval' : 'placed';
+      const status = needsApproval ? 'pending_approval' : 'approved';
 
       const createPayload = {
         dealer_id: payload.dealer_id,
