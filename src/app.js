@@ -9,6 +9,7 @@ const punchRoutes = require('./routes/punchRoutes');
 const orderRoutes = require('./routes/orderRoutes');
 const locationRoutes = require('./routes/locationRoutes');
 const analyticsRoutes = require('./routes/analyticsRoutes');
+const websiteRoutes = require('./routes/websiteRoutes');
 
 
 const authRoutes = require('./routes/authRoutes');
@@ -80,7 +81,8 @@ if (fs.existsSync(resetPasswordView)) {
 app.use('/api/auth', authRoutes);
 app.use('/api/attendance', punchRoutes); 
 app.use('/api/location', locationRoutes);
-app.use('/api/analytics',analyticsRoutes)
+app.use('/api/analytics',analyticsRoutes);
+app.use('/api', websiteRoutes);
 
 
 
