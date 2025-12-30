@@ -21,7 +21,7 @@
     "helmet": "^7.1.0",
     "jsonwebtoken": "^9.0.2",
     "multer": "^2.0.2",
-    "nodemailer": "^7.0.11",
+    "nodemailer": "^7.0.12",
     "winston": "^3.18.3",
     "winston-daily-rotate-file": "^5.0.0"
   },
