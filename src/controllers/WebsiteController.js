@@ -82,7 +82,7 @@ class WebsiteController {
       });
     } catch (error) {
       logger.error(`Contact form error: ${error.message}`);
-      console.log('❌ Contact form error:');
+      console.log(`Contact form error: ${error.message}`);
       return sendResponse(res, 500, 'Failed to send message. Please try again later.');
     }
   }
