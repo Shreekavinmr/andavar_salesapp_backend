@@ -10,6 +10,7 @@ const orderRoutes = require('./routes/orderRoutes');
 const locationRoutes = require('./routes/locationRoutes');
 const analyticsRoutes = require('./routes/analyticsRoutes');
 const websiteRoutes = require('./routes/websiteRoutes');
+require('./jobs/healthPing');
 
 
 const authRoutes = require('./routes/authRoutes');
