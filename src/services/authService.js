@@ -47,11 +47,11 @@ class AuthService {
 static async login(email, password) {
   try {
 
-    const isEmail = identifier.includes('@');
+    const isEmail = email.includes('@');
     // Find user by email
     const user = isEmail 
-      ? await UserModel.findByEmail(identifier)
-      : await UserModel.findByMobile(identifier);
+      ? await UserModel.findByEmail(email)
+      : await UserModel.findByMobile(email);
     
     if (!user) {
       throw new Error('Invalid credentials');

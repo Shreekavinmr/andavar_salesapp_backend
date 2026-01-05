@@ -27,6 +27,29 @@ class UserModel {
       throw new Error(`User fetch error: ${error.message}`);
     }
   }
+  static async findByMobile(mobileNumber) {
+  try {
+    const { data, error } = await supabase
+      .from("profiles_onboard")
+      .select(
+        "id, email, phone, password_hash, full_name, role, is_active, employee_code"
+      )
+      .eq("phone", mobileNumber)
+      .single();
+
+    if (error && error.code !== "PGRST116") {
+      throw new Error(`Database error: ${error.message}`);
+    }
+
+    if (data && !data.is_active) {
+      return null;
+    }
+
+    return data || null;
+  } catch (error) {
+    throw new Error(`User fetch error: ${error.message}`);
+  }
+}
 
   // Find by reset token
   static async findByResetToken(token) {
