@@ -46,10 +46,15 @@ class AuthService {
 
 static async login(email, password) {
   try {
+
+    const isEmail = identifier.includes('@');
     // Find user by email
-    const user = await UserModel.findByEmail(email);
+    const user = isEmail 
+      ? await UserModel.findByEmail(identifier)
+      : await UserModel.findByMobile(identifier);
+    
     if (!user) {
-      throw new Error('Invalid email or password');
+      throw new Error('Invalid credentials');
     }
 
     // Compare password
@@ -69,8 +74,6 @@ static async login(email, password) {
       }
     }
 
-    console.log('🔐 Login - User role from DB:', user.role); // Debug
-    console.log('🔐 Login - Processed roles array:', roles); // Debug
 
     // Generate JWT with roles as array
     const token = jwt.sign(
