@@ -6,16 +6,29 @@ const logger = require('../utils/logger');
 class OrderController {
   // POST /orders
   static async createOrder(req, res) {
-    try {
-      const actor = req.user;
-      const payload = req.body;
-      const result = await OrderService.createOrder(payload, actor);
-      sendResponse(res, result.pending_approval ? 202 : 201, result.pending_approval ? 'Order pending approval' : 'Order created', result.order);
-    } catch (error) {
-      logger.error(`OrderController.createOrder error: ${error.message}`);
-      sendResponse(res, 400, error.message);
+  try {
+    const actor = req.user;
+    const payload = req.body;
+    const result = await OrderService.createOrder(payload, actor);
+    
+    // ✅ Different status codes for different outcomes
+    let statusCode = 201;
+    let message = 'Order created';
+    
+    if (result.is_draft) {
+      statusCode = 201;
+      message = 'Draft order created';
+    } else if (result.pending_approval) {
+      statusCode = 202;
+      message = 'Order pending approval';
     }
+    
+    sendResponse(res, statusCode, message, result.order);
+  } catch (error) {
+    logger.error(`OrderController.createOrder error: ${error.message}`);
+    sendResponse(res, 400, error.message);
   }
+}
 
   // GET /orders/:id
   static async getOrder(req, res) {
@@ -59,16 +72,23 @@ class OrderController {
 
   // POST /orders/:id/approve
   static async approveOrder(req, res) {
-    try {
-      const id = req.params.id;
-      const approver = req.user;
-      const result = await OrderService.approveOrder(id, approver);
-      sendResponse(res, 200, 'Order approved', result.order);
-    } catch (e) {
-      logger.error(`OrderController.approveOrder error: ${e.message}`);
-      sendResponse(res, 403, e.message);
+  try {
+    const id = req.params.id;
+    const approver = req.user;
+    const result = await OrderService.approveOrder(id, approver);
+    
+    // ✅ Different messages based on outcome
+    let message = 'Order approved';
+    if (result.pending_approval) {
+      message = 'Draft converted to order - pending final approval';
     }
+    
+    sendResponse(res, 200, message, result.order);
+  } catch (e) {
+    logger.error(`OrderController.approveOrder error: ${e.message}`);
+    sendResponse(res, 403, e.message);
   }
+}
 
   // POST /orders/:id/reject
   static async rejectOrder(req, res) {

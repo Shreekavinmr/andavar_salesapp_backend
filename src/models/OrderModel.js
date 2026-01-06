@@ -63,13 +63,15 @@ class OrderModel {
       notes = null,
       total_amount = 0,
       order_lines = [],
-      status = 'placed',
+      status = 'draft',
+      approved_by = null,
     } = payload;
 
     // Validate UUIDs before insert
     if (!isValidUUID(dealer_id)) throw new Error('Invalid dealer_id UUID');
-    if (!isValidUUID(created_by)) throw new Error('Invalid created_by UUID');
-    if (placed_on && !isValidUUID(placed_on)) throw new Error('Invalid placed_on UUID');
+  if (!isValidUUID(created_by)) throw new Error('Invalid created_by UUID');
+  if (placed_on && !isValidUUID(placed_on)) throw new Error('Invalid placed_on UUID');
+  if (approved_by && !isValidUUID(approved_by)) throw new Error('Invalid approved_by UUID');
 
     // Determine product type from order lines
     const product_type = await this.determineProductType(order_lines);
@@ -85,6 +87,7 @@ class OrderModel {
         total_amount,
         notes,
         product_type, // NEW: Add product type
+        approved_by,
         created_at: new Date().toISOString()
       })
       .select()
@@ -159,10 +162,14 @@ class OrderModel {
     return data;
   }
 
-  static async updateOrderStatus(orderId, status, updaterId) {
+  static async updateOrderStatus(orderId, status, updaterId, approvedBy = null) {
     if (!isValidUUID(orderId)) throw new Error('Invalid orderId UUID');
     if (!isValidUUID(updaterId)) throw new Error('Invalid updaterId UUID');
     const payload = { status, updated_at: new Date().toISOString() };
+    if (approvedBy && isValidUUID(approvedBy)) {
+    payload.approved_by = approvedBy;
+  }
+
     const { data, error } = await supabase
       .from('orders')
       .update(payload)
@@ -186,7 +193,8 @@ class OrderModel {
         order_lines:order_lines(*),
         dealer:dealers!orders_dealer_id_fkey(id, name, phone, state, address, pincode),
         created_by_profile:profiles_onboard!orders_created_by_fkey(id, full_name, email, phone, role),
-        placed_on_profile:profiles_onboard!orders_placed_on_fkey(id, full_name, email, phone, role)
+        placed_on_profile:profiles_onboard!orders_placed_on_fkey(id, full_name, email, phone, role),
+        approved_by_profile:profiles_onboard!orders_approved_by_fkey(id, full_name, email, phone, role)
       `, { count: 'exact' })
       .eq('is_active', true);
 
@@ -201,7 +209,7 @@ class OrderModel {
       // Only SOs (placed_on is always SO)
       const visibleUsers = [actorId, ...reportees];
 
-      q = q.in('placed_on', visibleUsers);
+      q = q.or(`and(status.eq.draft,created_by.in.(${visibleUsers.join(',')})),and(status.neq.draft,placed_on.in.(${visibleUsers.join(',')}))`);
     }
 
     // ---------------------------------------
@@ -313,6 +321,19 @@ class OrderModel {
 
     return stats;
   }
+
+  static async canApproveDraft(draftCreatorId, approverId) {
+  if (!isValidUUID(draftCreatorId)) return false;
+  if (!isValidUUID(approverId)) return false;
+
+  const approverRole = await DealerModel.getRoleName(approverId);
+  
+  if (['sales_officer'].includes(approverRole)) return false;
+
+  // Check if draft creator reports to approver
+  const reportees = await DealerModel.getAllReportees(approverId);
+  return reportees.includes(draftCreatorId);
+}
 }
 
 module.exports = OrderModel;

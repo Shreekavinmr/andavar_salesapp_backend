@@ -6,112 +6,188 @@ const logger = require('../utils/logger');
 
 class OrderService {
   static async createOrder(payload, actor) {
-    try {
-      if (!payload || !payload.dealer_id) throw new Error('dealer_id required');
-      if (!actor || !actor.id) throw new Error('actor required');
+  try {
+    if (!payload || !payload.dealer_id) throw new Error('dealer_id required');
+    if (!actor || !actor.id) throw new Error('actor required');
 
-      // Normalize lines & calculate total
-      const lines = Array.isArray(payload.order_lines) ? payload.order_lines : [];
-      const computedLines = lines.map(l => {
-        const qty = Number(l.quantity) || 0;
-        const unitPrice = l.unit_price == null ? 0 : parseFloat(l.unit_price);
-        const amount = l.amount != null ? parseFloat(l.amount) : (unitPrice * qty);
-        return { ...l, quantity: qty, unit_price: unitPrice, amount: parseFloat(amount.toFixed(2)) };
-      });
+    // Normalize lines & calculate total
+    const lines = Array.isArray(payload.order_lines) ? payload.order_lines : [];
+    const computedLines = lines.map(l => {
+      const qty = Number(l.quantity) || 0;
+      const unitPrice = l.unit_price == null ? 0 : parseFloat(l.unit_price);
+      const amount = l.amount != null ? parseFloat(l.amount) : (unitPrice * qty);
+      return { ...l, quantity: qty, unit_price: unitPrice, amount: parseFloat(amount.toFixed(2)) };
+    });
 
-      const total = payload.total_amount != null ? parseFloat(payload.total_amount) : parseFloat(computedLines.reduce((s, ln) => s + parseFloat(ln.amount || 0), 0).toFixed(2));
+    const total = payload.total_amount != null 
+      ? parseFloat(payload.total_amount) 
+      : parseFloat(computedLines.reduce((s, ln) => s + parseFloat(ln.amount || 0), 0).toFixed(2));
 
-      // Get current outstanding from pending_amounts
+    // ✅ Get actor role
+    const role = await DealerModel.getRoleName(actor.id);
+
+    let status, needsApproval = false;
+
+    // ✅ If SO, create as draft (no credit check)
+    if (role === 'sales_officer' || role === 'so') {
+      status = 'draft';
+      logger.info(`SO ${actor.id} created draft order for dealer ${payload.dealer_id}`);
+    } else {
+      // ✅ ASM/RSM/GM/Owner - create real order with credit check
       const currentOutstanding = await DealerLedgerModel.getDealerPendingAmount(payload.dealer_id);
       const creditLimit = await DealerModel.getDealerCreditLimit(payload.dealer_id);
 
-      // Log for debug (zero pending but approval?)
-      logger.info(`Order create dealer ${payload.dealer_id}: current_outstanding=${currentOutstanding}, total=${total}, credit_limit=${creditLimit}, needs_approval=${currentOutstanding > creditLimit}`);
+      logger.info(`Order create by ${role} dealer ${payload.dealer_id}: outstanding=${currentOutstanding}, total=${total}, limit=${creditLimit}`);
 
-      // Approval: current_outstanding > credit_limit (irrespective of order value)
-      const needsApproval = currentOutstanding > creditLimit;
-      const status = needsApproval ? 'pending_approval' : 'approved';
-
-      const createPayload = {
-        dealer_id: payload.dealer_id,
-        placed_on: payload.placed_on || null,
-        created_by: actor.id,
-        notes: payload.notes || null,
-        total_amount: total,
-        status,
-        order_lines: computedLines,
-      };
-
-      const created = await OrderModel.createOrder(createPayload);
-
-      // If 'placed' (no approval needed), add to ledger and update pending_amounts
-      if (status === 'placed') {
-        await DealerLedgerModel.recordOrderCharge(payload.dealer_id, total, created.id, actor.id,created.product_type);
-      }
-
-      return {
-        success: true,
-        order: created,
-        pending_approval: needsApproval,
-        current_outstanding: currentOutstanding,
-        credit_limit: creditLimit
-      };
-    } catch (error) {
-      logger.error(`OrderService.createOrder error: ${error.message}`);
-      throw error;
+      needsApproval = currentOutstanding > creditLimit;
+      status = needsApproval ? 'pending_approval' : 'approved';
     }
+
+    const createPayload = {
+      dealer_id: payload.dealer_id,
+      placed_on: payload.placed_on || null,
+      created_by: actor.id,
+      notes: payload.notes || null,
+      total_amount: total,
+      status,
+      order_lines: computedLines,
+      approved_by: status === 'approved' ? actor.id : null, // ✅ Set approved_by if auto-approved
+    };
+
+    const created = await OrderModel.createOrder(createPayload);
+
+    // ✅ If approved immediately, record to ledger
+    if (status === 'approved') {
+      await DealerLedgerModel.recordOrderCharge(
+        payload.dealer_id, 
+        total, 
+        created.id, 
+        actor.id,
+        created.product_type
+      );
+    }
+
+    return {
+      success: true,
+      order: created,
+      pending_approval: needsApproval,
+      is_draft: status === 'draft',
+    };
+  } catch (error) {
+    logger.error(`OrderService.createOrder error: ${error.message}`);
+    throw error;
   }
+}
 
   static async approveOrder(orderId, approver) {
-    try {
-      if (!approver || !approver.id) throw new Error('approver required');
-      const role = await DealerModel.getRoleName(approver.id);
-      if (!['gm','owner','admin'].includes(role)) throw new Error('Not authorized to approve orders');
+  try {
+    if (!approver || !approver.id) throw new Error('approver required');
 
-      const order = await OrderModel.getOrderById(orderId);
-      if (!order) throw new Error('Order not found');
+    const order = await OrderModel.getOrderById(orderId);
+    if (!order) throw new Error('Order not found');
 
-      if (order.status !== 'pending_approval') {
-        throw new Error(`Order status must be 'pending_approval' to approve. Current: ${order.status}`);
+    const approverRole = await DealerModel.getRoleName(approver.id);
+
+    // ✅ SCENARIO 1: Converting DRAFT to real order
+    if (order.status === 'draft') {
+      // Check if approver can approve this draft
+      const canApprove = await OrderModel.canApproveDraft(order.created_by, approver.id);
+      if (!canApprove) {
+        throw new Error('Not authorized to approve this draft');
       }
 
-      const updated = await OrderModel.updateOrderStatus(orderId, 'approved', approver.id);
-      await OrderModel.createApprovalRecord(orderId, approver.id, 'approved', null);
+      // Check credit limit
+      const currentOutstanding = await DealerLedgerModel.getDealerPendingAmount(order.dealer_id);
+      const creditLimit = await DealerModel.getDealerCreditLimit(order.dealer_id);
 
-      // NOW record to ledger (outstanding charge on approval)
-      await DealerLedgerModel.recordOrderCharge(order.dealer_id, order.total_amount, orderId, approver.id,order.product_type);
+      logger.info(`Converting draft ${orderId}: outstanding=${currentOutstanding}, total=${order.total_amount}, limit=${creditLimit}`);
+
+      const needsApproval = currentOutstanding > creditLimit;
+      const newStatus = needsApproval ? 'pending_approval' : 'approved';
+
+      const updated = await OrderModel.updateOrderStatus(orderId, newStatus, approver.id, approver.id);
+      await OrderModel.createApprovalRecord(orderId, approver.id, 'draft_approved', 'Converted draft to order');
+
+      // If approved, record to ledger
+      if (newStatus === 'approved') {
+        await DealerLedgerModel.recordOrderCharge(
+          order.dealer_id, 
+          order.total_amount, 
+          orderId, 
+          approver.id,
+          order.product_type
+        );
+      }
+
+      return { 
+        success: true, 
+        order: updated, 
+        pending_approval: needsApproval 
+      };
+    }
+
+    // ✅ SCENARIO 2: GM/Owner approving PENDING_APPROVAL order
+    if (order.status === 'pending_approval') {
+      if (!['gm', 'owner', 'admin'].includes(approverRole)) {
+        throw new Error('Only GM/Owner can approve pending orders');
+      }
+
+      const updated = await OrderModel.updateOrderStatus(orderId, 'approved', approver.id, approver.id);
+      await OrderModel.createApprovalRecord(orderId, approver.id, 'approved', 'Final approval');
+
+      // Record to ledger
+      await DealerLedgerModel.recordOrderCharge(
+        order.dealer_id, 
+        order.total_amount, 
+        orderId, 
+        approver.id,
+        order.product_type
+      );
 
       return { success: true, order: updated };
-    } catch (err) {
-      logger.error(`OrderService.approveOrder error: ${err.message}`);
-      throw err;
     }
+
+    throw new Error(`Cannot approve order with status: ${order.status}`);
+  } catch (err) {
+    logger.error(`OrderService.approveOrder error: ${err.message}`);
+    throw err;
   }
+}
 
   static async rejectOrder(orderId, approver, comment = null) {
-    try {
-      if (!approver || !approver.id) throw new Error('approver required');
-      const role = await DealerModel.getRoleName(approver.id);
-      if (!['gm','owner','admin'].includes(role)) throw new Error('Not authorized to reject orders');
+  try {
+    if (!approver || !approver.id) throw new Error('approver required');
 
-      const order = await OrderModel.getOrderById(orderId);
-      if (!order) throw new Error('Order not found');
+    const order = await OrderModel.getOrderById(orderId);
+    if (!order) throw new Error('Order not found');
 
-      if (order.status !== 'pending_approval') {
-        throw new Error(`Order status must be 'pending_approval' to reject. Current: ${order.status}`);
+    const approverRole = await DealerModel.getRoleName(approver.id);
+
+    // ✅ Allow rejecting drafts by superiors
+    if (order.status === 'draft') {
+      const canReject = await OrderModel.canApproveDraft(order.created_by, approver.id);
+      if (!canReject) {
+        throw new Error('Not authorized to reject this draft');
       }
-
-      const updated = await OrderModel.updateOrderStatus(orderId, 'rejected', approver.id);
-      await OrderModel.createApprovalRecord(orderId, approver.id, 'rejected', comment);
-
-      // No ledger cleanup needed (none added yet)
-
-      return { success: true, order: updated };
-    } catch (err) {
-      logger.error(`OrderService.rejectOrder error: ${err.message}`);
-      throw err;
+    } 
+    // ✅ Allow rejecting pending_approval by GM/Owner
+    else if (order.status === 'pending_approval') {
+      if (!['gm', 'owner', 'admin'].includes(approverRole)) {
+        throw new Error('Only GM/Owner can reject pending orders');
+      }
+    } else {
+      throw new Error(`Cannot reject order with status: ${order.status}`);
     }
+
+    const updated = await OrderModel.updateOrderStatus(orderId, 'rejected', approver.id);
+    await OrderModel.createApprovalRecord(orderId, approver.id, 'rejected', comment);
+
+    return { success: true, order: updated };
+  } catch (err) {
+    logger.error(`OrderService.rejectOrder error: ${err.message}`);
+    throw err;
   }
+}
 
   static async markDelivered(orderId, updater) {
   try {
